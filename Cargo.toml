@@ -31,6 +31,11 @@ dotenv = "0.15"
 
 # Error handling
 anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
