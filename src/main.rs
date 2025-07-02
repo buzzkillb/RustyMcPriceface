@@ -11,8 +11,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 use std::sync::Arc;
 use dotenv::dotenv;
-use std::sync::Mutex;
-use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serenity::all::ActivityData;
 use std::fs;
@@ -22,12 +20,6 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 const TRACKING_DURATION_SECONDS: u64 = 3600; // 1 hour
-
-#[derive(Clone)]
-struct PricePoint {
-    price: f64,
-    timestamp: u64,
-}
 
 #[derive(serde::Deserialize)]
 struct PriceData {
@@ -43,14 +35,12 @@ struct PricesFile {
 }
 
 struct Bot {
-    price_history: Arc<Mutex<VecDeque<PricePoint>>>,
+    // Remove in-memory price history since we'll use SQLite
 }
 
 impl Bot {
     fn new() -> Self {
-        Bot {
-            price_history: Arc::new(Mutex::new(VecDeque::new())),
-        }
+        Bot {}
     }
 
     async fn register_commands(&self, http: &Http) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -106,79 +96,10 @@ impl Bot {
                     
                     println!("💰 {} price: ${}", crypto_name, price_data.price);
                     
-                    // Calculate price changes over different time periods
-                    let change_info = if let Ok(conn) = get_db_connection() {
-                        let current_time = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
-                        
-                        let mut changes = Vec::new();
-                        
-                        // 1 hour change
-                        if let Ok(mut stmt) = conn.prepare(
-                            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
-                        ) {
-                            let one_hour_ago = current_time - 3600;
-                            if let Ok(rows) = stmt.query_map([&crypto_name, &one_hour_ago.to_string()], |row| {
-                                Ok(row.get(0)?)
-                            }) {
-                                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
-                                    if let Some(old_price) = prices.pop() {
-                                        let change_percent = ((price_data.price - old_price) / old_price) * 100.0;
-                                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
-                                        let sign = if change_percent >= 0.0 { "+" } else { "" };
-                                        changes.push(format!("{} {}{:.2}% (1h)", arrow, sign, change_percent));
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // 12 hour change
-                        if let Ok(mut stmt) = conn.prepare(
-                            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
-                        ) {
-                            let twelve_hours_ago = current_time - 43200;
-                            if let Ok(rows) = stmt.query_map([&crypto_name, &twelve_hours_ago.to_string()], |row| {
-                                Ok(row.get(0)?)
-                            }) {
-                                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
-                                    if let Some(old_price) = prices.pop() {
-                                        let change_percent = ((price_data.price - old_price) / old_price) * 100.0;
-                                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
-                                        let sign = if change_percent >= 0.0 { "+" } else { "" };
-                                        changes.push(format!("{} {}{:.2}% (12h)", arrow, sign, change_percent));
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // 24 hour change
-                        if let Ok(mut stmt) = conn.prepare(
-                            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
-                        ) {
-                            let twenty_four_hours_ago = current_time - 86400;
-                            if let Ok(rows) = stmt.query_map([&crypto_name, &twenty_four_hours_ago.to_string()], |row| {
-                                Ok(row.get(0)?)
-                            }) {
-                                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
-                                    if let Some(old_price) = prices.pop() {
-                                        let change_percent = ((price_data.price - old_price) / old_price) * 100.0;
-                                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
-                                        let sign = if change_percent >= 0.0 { "+" } else { "" };
-                                        changes.push(format!("{} {}{:.2}% (24h)", arrow, sign, change_percent));
-                                    }
-                                }
-                            }
-                        }
-                        
-                        if changes.is_empty() {
-                            " 🔄 Building history".to_string()
-                        } else {
-                            format!(" {}", changes.join(" | "))
-                        }
-                    } else {
-                        " 🔄 Building history".to_string()
+                    // Calculate price changes over different time periods using database
+                    let change_info = match get_price_changes(&crypto_name, price_data.price) {
+                        Ok(changes) => changes,
+                        Err(_) => " 🔄 Building history".to_string(),
                     };
                     
                     // Build the main response
@@ -423,6 +344,51 @@ fn get_price_history(crypto: &str, limit: i64) -> Result<String, Box<dyn std::er
     Ok(result)
 }
 
+fn get_price_changes(crypto: &str, current_price: f64) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let conn = get_db_connection()?;
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    let mut changes = Vec::new();
+    
+    // Define time periods and their labels
+    let periods = vec![
+        (3600, "1h"),
+        (43200, "12h"), 
+        (86400, "24h"),
+        (604800, "7d"),
+    ];
+    
+    for (seconds, label) in periods {
+        let time_ago = current_time - seconds;
+        
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+        ) {
+            if let Ok(rows) = stmt.query_map([crypto, &time_ago.to_string()], |row| {
+                Ok(row.get(0)?)
+            }) {
+                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
+                    if let Some(old_price) = prices.pop() {
+                        let change_percent = ((current_price - old_price) / old_price) * 100.0;
+                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
+                        let sign = if change_percent >= 0.0 { "+" } else { "" };
+                        changes.push(format!("{} {}{:.2}% ({})", arrow, sign, change_percent, label));
+                    }
+                }
+            }
+        }
+    }
+    
+    if changes.is_empty() {
+        Ok("🔄 Building history".to_string())
+    } else {
+        Ok(format!(" {}", changes.join(" | ")))
+    }
+}
+
 fn get_database_stats() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let conn = get_db_connection()?;
     
@@ -446,6 +412,27 @@ fn get_database_stats() -> Result<String, Box<dyn std::error::Error + Send + Syn
     Ok(result)
 }
 
+fn cleanup_old_prices() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let conn = get_db_connection()?;
+    
+    // Keep only the last 7 days of data (604800 seconds)
+    let cutoff_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() - 604800;
+    
+    let deleted = conn.execute(
+        "DELETE FROM prices WHERE timestamp < ?",
+        [&cutoff_time.to_string()]
+    )?;
+    
+    if deleted > 0 {
+        println!("🧹 Cleaned up {} old price records from database", deleted);
+    }
+    
+    Ok(())
+}
+
 #[async_trait]
 impl EventHandler for Bot {
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -462,10 +449,9 @@ impl EventHandler for Bot {
         println!("🔄 Starting price update loop...");
         let http = ctx.http.clone();
         let ctx_arc = Arc::new(ctx);
-        let price_history = self.price_history.clone();
         
         tokio::spawn(async move {
-            price_update_loop(http, ctx_arc, price_history).await;
+            price_update_loop(http, ctx_arc).await;
         });
         
         println!("✅ Bot initialization complete!");
@@ -546,62 +532,59 @@ async fn get_crypto_price() -> Result<f64, Box<dyn std::error::Error + Send + Sy
     Err(format!("Could not find price for {}", crypto_name).into())
 }
 
-fn get_price_indicator(current_price: f64, price_history: &mut VecDeque<PricePoint>) -> (String, f64) {
+fn get_price_indicator_from_db(crypto_name: &str, current_price: f64) -> (String, f64) {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
     
-    // Add current price to history
-    price_history.push_back(PricePoint {
-        price: current_price,
-        timestamp: current_time,
-    });
-    
-    // Remove old prices (older than 1 hour)
-    while let Some(front) = price_history.front() {
-        if current_time - front.timestamp > TRACKING_DURATION_SECONDS {
-            price_history.pop_front();
-        } else {
-            break;
+    // Get the oldest price from the last hour
+    if let Ok(conn) = get_db_connection() {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+        ) {
+            let one_hour_ago = current_time - TRACKING_DURATION_SECONDS;
+            if let Ok(rows) = stmt.query_map([crypto_name, &one_hour_ago.to_string()], |row| {
+                Ok(row.get(0)?)
+            }) {
+                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
+                    if let Some(oldest_price) = prices.pop() {
+                        let change = current_price - oldest_price;
+                        let change_percent = (change / oldest_price) * 100.0;
+                        
+                        let arrow = if change > 0.0 {
+                            "📈" // Up arrow
+                        } else if change < 0.0 {
+                            "📉" // Down arrow
+                        } else {
+                            "➡️" // Side arrow (no change)
+                        };
+                        
+                        return (arrow.to_string(), change_percent);
+                    }
+                }
+            }
         }
     }
     
-    // Get the oldest price in our 1-hour window
-    if let Some(oldest_price) = price_history.front() {
-        let change = current_price - oldest_price.price;
-        let change_percent = (change / oldest_price.price) * 100.0;
-        
-        let arrow = if change > 0.0 {
-            "📈" // Up arrow
-        } else if change < 0.0 {
-            "📉" // Down arrow
-        } else {
-            "➡️" // Side arrow (no change)
-        };
-        
-        (arrow.to_string(), change_percent)
-    } else {
-        // No history yet
-        ("🔄".to_string(), 0.0)
-    }
+    // No history yet or database error
+    ("🔄".to_string(), 0.0)
 }
 
-async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, price_history: Arc<Mutex<VecDeque<PricePoint>>>) {
+async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>) {
     // Get update interval from environment
     let update_interval = std::env::var("UPDATE_INTERVAL_SECONDS")
         .unwrap_or_else(|_| "300".to_string())
         .parse::<u64>()
         .unwrap_or(300);
     
+    let crypto_name = get_crypto_name();
+    
     loop {
         match get_crypto_price().await {
             Ok(current_price) => {
-                // Get price change over last 30 minutes
-                let (arrow, change_percent) = {
-                    let mut history_guard = price_history.lock().unwrap();
-                    get_price_indicator(current_price, &mut history_guard)
-                };
+                // Get price change over last hour from database
+                let (arrow, change_percent) = get_price_indicator_from_db(&crypto_name, current_price);
                 
                 // Format the nickname (just the price)
                 let crypto_name = get_crypto_name();
@@ -710,6 +693,24 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, price_history: Ar
                     println!("📝 About Me would be: {}", about_me);
                 }
                 
+                // Save current price to database for history
+                if let Ok(conn) = get_db_connection() {
+                    let current_time = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    
+                    if let Ok(mut stmt) = conn.prepare(
+                        "INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)"
+                    ) {
+                        if let Err(e) = stmt.execute([&crypto_name, &current_price.to_string(), &current_time.to_string()]) {
+                            println!("❌ Failed to save price to database: {}", e);
+                        } else {
+                            println!("✅ Saved {} price to database: ${}", crypto_name, current_price);
+                        }
+                    }
+                }
+                
                 // Iterate over all guilds and update nickname
                 let guilds = ctx.cache.guilds();
                 for guild_id in guilds {
@@ -724,8 +725,24 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, price_history: Ar
             }
         }
         
-        // Wait for the next update using the configurable interval
-        sleep(Duration::from_secs(update_interval)).await;
+                        // Periodic cleanup of old prices (every 24 hours)
+                static mut LAST_CLEANUP: u64 = 0;
+                unsafe {
+                    let current_time = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    
+                    if current_time - LAST_CLEANUP > 86400 { // 24 hours
+                        if let Err(e) = cleanup_old_prices() {
+                            println!("❌ Failed to cleanup old prices: {}", e);
+                        }
+                        LAST_CLEANUP = current_time;
+                    }
+                }
+                
+                // Wait for the next update using the configurable interval
+                sleep(Duration::from_secs(update_interval)).await;
     }
 }
 
