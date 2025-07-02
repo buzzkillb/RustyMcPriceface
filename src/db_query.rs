@@ -205,17 +205,17 @@ fn show_history(conn: &Connection, crypto: Option<String>, limit: i64) -> Sqlite
 }
 
 fn cleanup_old_prices(conn: &Connection) -> SqliteResult<()> {
-    // Delete prices older than 7 days (7 * 24 * 60 * 60 = 604800 seconds)
-    let seven_days_ago = std::time::SystemTime::now()
+    // Delete prices older than 30 days (30 * 24 * 60 * 60 = 2592000 seconds)
+    let thirty_days_ago = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() - 604800;
+        .as_secs() - 2592000;
     
     let deleted = conn.execute(
         "DELETE FROM prices WHERE timestamp < ?",
-        [&seven_days_ago.to_string()],
+        [&thirty_days_ago.to_string()],
     )?;
     
-    println!("🧹 Cleaned up {} old price records", deleted);
+    println!("🧹 Cleaned up {} old price records (older than 30 days)", deleted);
     Ok(())
 } 

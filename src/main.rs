@@ -3,6 +3,9 @@ use serenity::{
     model::gateway::Ready,
     prelude::*,
     http::Http,
+    all::{Command, CommandDataOptionValue, CommandOptionType, CreateCommand, CreateCommandOption},
+    model::application::CommandInteraction,
+    builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
 };
 use std::time::Duration;
 use tokio::time::sleep;
@@ -47,6 +50,191 @@ impl Bot {
     fn new() -> Self {
         Bot {
             price_history: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    async fn register_commands(&self, http: &Http) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("🔄 Attempting to register slash commands...");
+        
+        let current_crypto = get_crypto_name();
+        let price_command = CreateCommand::new("price")
+            .description(format!("Get current price for a cryptocurrency (defaults to {})", current_crypto))
+            .add_option(
+                CreateCommandOption::new(CommandOptionType::String, "crypto", format!("Cryptocurrency symbol (defaults to {})", current_crypto))
+                    .required(false)
+            );
+
+        println!("🔄 Creating global command...");
+        
+        match Command::create_global_command(http, price_command).await {
+            Ok(_) => {
+                println!("✅ Successfully registered /price command globally");
+                println!("⚠️  Note: Global commands can take up to 1 hour to appear in Discord");
+                println!("🔄 You can test immediately by typing /price in Discord");
+            }
+            Err(e) => {
+                println!("❌ Failed to register /price command: {}", e);
+                return Err(e.into());
+            }
+        }
+        
+        Ok(())
+    }
+
+    async fn handle_price_command(&self, interaction: &CommandInteraction) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Get crypto name from command option, or default to current bot's crypto
+        let crypto_name = if let Some(crypto_option) = interaction.data.options.iter().find(|opt| opt.name == "crypto") {
+            match &crypto_option.value {
+                CommandDataOptionValue::String(s) => s.clone(),
+                _ => return Err("Invalid crypto option".into()),
+            }
+        } else {
+            // No crypto specified, use the current bot's crypto
+            get_crypto_name()
+        };
+
+        println!("🔍 /price command called for: {}", crypto_name);
+
+        // Get current price from shared prices file
+        match read_prices_from_file().await {
+            Ok(prices) => {
+                println!("📊 Available cryptos: {:?}", prices.prices.keys().collect::<Vec<_>>());
+                
+                if let Some(price_data) = prices.prices.get(&crypto_name) {
+                    let emoji = get_crypto_emoji(&crypto_name);
+                    let formatted_price = format_price(price_data.price);
+                    
+                    println!("💰 {} price: ${}", crypto_name, price_data.price);
+                    
+                    // Calculate price changes over different time periods
+                    let change_info = if let Ok(conn) = get_db_connection() {
+                        let current_time = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+                        
+                        let mut changes = Vec::new();
+                        
+                        // 1 hour change
+                        if let Ok(mut stmt) = conn.prepare(
+                            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+                        ) {
+                            let one_hour_ago = current_time - 3600;
+                            if let Ok(rows) = stmt.query_map([&crypto_name, &one_hour_ago.to_string()], |row| {
+                                Ok(row.get(0)?)
+                            }) {
+                                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
+                                    if let Some(old_price) = prices.pop() {
+                                        let change_percent = ((price_data.price - old_price) / old_price) * 100.0;
+                                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
+                                        let sign = if change_percent >= 0.0 { "+" } else { "" };
+                                        changes.push(format!("{} {}{:.2}% (1h)", arrow, sign, change_percent));
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 12 hour change
+                        if let Ok(mut stmt) = conn.prepare(
+                            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+                        ) {
+                            let twelve_hours_ago = current_time - 43200;
+                            if let Ok(rows) = stmt.query_map([&crypto_name, &twelve_hours_ago.to_string()], |row| {
+                                Ok(row.get(0)?)
+                            }) {
+                                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
+                                    if let Some(old_price) = prices.pop() {
+                                        let change_percent = ((price_data.price - old_price) / old_price) * 100.0;
+                                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
+                                        let sign = if change_percent >= 0.0 { "+" } else { "" };
+                                        changes.push(format!("{} {}{:.2}% (12h)", arrow, sign, change_percent));
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 24 hour change
+                        if let Ok(mut stmt) = conn.prepare(
+                            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+                        ) {
+                            let twenty_four_hours_ago = current_time - 86400;
+                            if let Ok(rows) = stmt.query_map([&crypto_name, &twenty_four_hours_ago.to_string()], |row| {
+                                Ok(row.get(0)?)
+                            }) {
+                                if let Ok(mut prices) = rows.collect::<Result<Vec<f64>, _>>() {
+                                    if let Some(old_price) = prices.pop() {
+                                        let change_percent = ((price_data.price - old_price) / old_price) * 100.0;
+                                        let arrow = if change_percent > 0.0 { "📈" } else if change_percent < 0.0 { "📉" } else { "➡️" };
+                                        let sign = if change_percent >= 0.0 { "+" } else { "" };
+                                        changes.push(format!("{} {}{:.2}% (24h)", arrow, sign, change_percent));
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if changes.is_empty() {
+                            " 🔄 Building history".to_string()
+                        } else {
+                            format!(" {}", changes.join(" | "))
+                        }
+                    } else {
+                        " 🔄 Building history".to_string()
+                    };
+                    
+                    // Build the main response
+                    let mut response = format!("{} {}: {} {}", emoji, crypto_name, formatted_price, change_info);
+                    
+                    // Add prices in terms of BTC, ETH, and SOL (excluding the crypto's own price)
+                    let mut conversion_prices = Vec::new();
+                    
+                    if crypto_name != "BTC" {
+                        if let Some(btc_price) = prices.prices.get("BTC") {
+                            let btc_conversion = price_data.price / btc_price.price;
+                            conversion_prices.push(format!("{:.8} BTC", btc_conversion));
+                            println!("🟡 BTC conversion: {:.8} BTC", btc_conversion);
+                        } else {
+                            println!("❌ BTC price not found in shared data");
+                        }
+                    }
+                    
+                    if crypto_name != "ETH" {
+                        if let Some(eth_price) = prices.prices.get("ETH") {
+                            let eth_conversion = price_data.price / eth_price.price;
+                            conversion_prices.push(format!("{:.6} ETH", eth_conversion));
+                            println!("🪙 ETH conversion: {:.6} ETH", eth_conversion);
+                        } else {
+                            println!("❌ ETH price not found in shared data");
+                        }
+                    }
+                    
+                    if crypto_name != "SOL" {
+                        if let Some(sol_price) = prices.prices.get("SOL") {
+                            let sol_conversion = price_data.price / sol_price.price;
+                            conversion_prices.push(format!("{:.4} SOL", sol_conversion));
+                            println!("📊 SOL conversion: {:.4} SOL", sol_conversion);
+                        } else {
+                            println!("❌ SOL price not found in shared data");
+                        }
+                    }
+                    
+                    // Add conversion prices to response if available
+                    if !conversion_prices.is_empty() {
+                        response.push_str(&format!("\n💱 Also: {}", conversion_prices.join(" | ")));
+                        println!("✅ Final response with conversions: {}", response);
+                    } else {
+                        println!("❌ No conversion prices available");
+                    }
+                    
+                    Ok(response)
+                } else {
+                    println!("❌ Price data not available for {}", crypto_name);
+                    Err(format!("Price data not available for {}", crypto_name).into())
+                }
+            }
+            Err(e) => {
+                println!("❌ Error reading prices file: {}", e);
+                Err("Unable to fetch price data. Make sure the price service is running.".into())
+            }
         }
     }
 }
@@ -262,7 +450,16 @@ fn get_database_stats() -> Result<String, Box<dyn std::error::Error + Send + Syn
 impl EventHandler for Bot {
     async fn ready(&self, ctx: Context, ready: Ready) {
         println!("Bot is ready! Logged in as: {}", ready.user.name);
+        println!("🔄 Event handler called - starting command registration...");
         
+        // Register slash commands
+        println!("🔄 Starting command registration...");
+        match self.register_commands(&ctx.http).await {
+            Ok(_) => println!("✅ Command registration completed successfully"),
+            Err(e) => println!("❌ Command registration failed: {}", e),
+        }
+        
+        println!("🔄 Starting price update loop...");
         let http = ctx.http.clone();
         let ctx_arc = Arc::new(ctx);
         let price_history = self.price_history.clone();
@@ -270,6 +467,46 @@ impl EventHandler for Bot {
         tokio::spawn(async move {
             price_update_loop(http, ctx_arc, price_history).await;
         });
+        
+        println!("✅ Bot initialization complete!");
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: serenity::model::application::Interaction) {
+        println!("🔍 Interaction received: {:?}", interaction.kind());
+        
+        if let serenity::model::application::Interaction::Command(command_interaction) = interaction {
+            println!("🔍 Command interaction: {}", command_interaction.data.name);
+            
+            let response = match command_interaction.data.name.as_str() {
+                "price" => {
+                    println!("🔍 Handling /price command");
+                    match self.handle_price_command(&command_interaction).await {
+                        Ok(message) => {
+                            println!("✅ /price command successful, responding with: {}", message);
+                            let data = CreateInteractionResponseMessage::new().content(message);
+                            let builder = CreateInteractionResponse::Message(data);
+                            command_interaction.create_response(&ctx.http, builder).await
+                        },
+                        Err(e) => {
+                            println!("❌ /price command failed: {}", e);
+                            let data = CreateInteractionResponseMessage::new().content(format!("❌ Error: {}", e));
+                            let builder = CreateInteractionResponse::Message(data);
+                            command_interaction.create_response(&ctx.http, builder).await
+                        },
+                    }
+                }
+                _ => {
+                    println!("❌ Unknown command: {}", command_interaction.data.name);
+                    let data = CreateInteractionResponseMessage::new().content("❌ Unknown command");
+                    let builder = CreateInteractionResponse::Message(data);
+                    command_interaction.create_response(&ctx.http, builder).await
+                }
+            };
+
+            if let Err(e) = response {
+                println!("❌ Failed to respond to interaction: {}", e);
+            }
+        }
     }
 }
 
@@ -494,6 +731,7 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, price_history: Ar
 
 #[tokio::main]
 async fn main() {
+    println!("🚀 Starting bot with slash command support...");
     dotenv().ok();
     
     // Load bot token from environment variable
@@ -515,12 +753,14 @@ async fn main() {
     println!("Reading from: shared/prices.json");
     
     // Create a new instance of the bot
-    let intents = GatewayIntents::default();
+    println!("🔄 Creating bot with event handler...");
+    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::GUILDS;
     let mut client = Client::builder(&token, intents)
         .event_handler(Bot::new())
         .await
         .expect("Error creating client");
     
+    println!("🔄 Starting bot client...");
     // Start the bot
     if let Err(why) = client.start().await {
         println!("Client error: {:?}", why);
