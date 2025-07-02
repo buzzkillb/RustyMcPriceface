@@ -1,0 +1,37 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Environment files with sensitive data
+.env
+.env.local
+.env.production
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+shared/
+
+# Log files
+*.log
+logs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Temporary files
+*.tmp
+*.temp

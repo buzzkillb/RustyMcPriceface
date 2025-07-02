@@ -1,0 +1,62 @@
+services:
+  price-service:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+      - CRYPTO_FEEDS=${CRYPTO_FEEDS:-BTC:0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,ETH:0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace,SOL:0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d}
+    command: ["./price-service"]
+    restart: unless-stopped
+
+  sol-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_SOL}
+      - CRYPTO_NAME=SOL
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+
+  fartcoin-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_FARTCOIN}
+      - CRYPTO_NAME=FARTCOIN
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+
+  btc-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_BTC}
+      - CRYPTO_NAME=BTC
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+
+  eth-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_ETH}
+      - CRYPTO_NAME=ETH
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped 
