@@ -1,0 +1,184 @@
+use crate::errors::{BotError, BotResult};
+use crate::config::PRICE_HISTORY_DAYS;
+use crate::utils::{get_current_timestamp, calculate_percentage_change, get_change_arrow, validate_crypto_name, validate_price};
+use rusqlite::Connection;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::{info, error, debug};
+
+const MAX_RETRIES: u32 = 3;
+const CLEANUP_INTERVAL_SECONDS: u64 = 86400; // 24 hours
+
+/// Database abstraction layer for price data
+#[derive(Debug)]
+pub struct PriceDatabase {
+    db_path: String,
+}
+
+impl PriceDatabase {
+    pub fn new(db_path: &str) -> Self {
+        Self {
+            db_path: db_path.to_string(),
+        }
+    }
+
+    /// Get a database connection with retry logic
+    pub fn get_connection(&self) -> BotResult<Connection> {
+        for attempt in 1..=MAX_RETRIES {
+            match Connection::open(&self.db_path) {
+                Ok(conn) => return Ok(conn),
+                Err(e) => {
+                    error!("Database connection attempt {} failed: {}", attempt, e);
+                    if attempt < MAX_RETRIES {
+                        std::thread::sleep(std::time::Duration::from_millis(1000 * attempt as u64));
+                    } else {
+                        return Err(BotError::Database(e));
+                    }
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    /// Save a price record to the database
+    pub fn save_price(&self, crypto_name: &str, price: f64) -> BotResult<()> {
+        let conn = self.get_connection()?;
+        let current_time = get_current_timestamp()?;
+        
+        let mut stmt = conn.prepare(
+            "INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)"
+        )?;
+        
+        stmt.execute([crypto_name, &price.to_string(), &current_time.to_string()])?;
+        debug!("Saved {} price to database: ${}", crypto_name, price);
+        Ok(())
+    }
+
+    /// Get price changes for different time periods
+    pub fn get_price_changes(&self, crypto: &str, current_price: f64) -> BotResult<String> {
+        validate_crypto_name(crypto)?;
+        validate_price(current_price)?;
+        
+        let conn = self.get_connection()?;
+        let current_time = get_current_timestamp()?;
+        
+        let mut changes = Vec::new();
+        
+        // Define time periods and their labels
+        let periods = vec![
+            (3600, "1h"),
+            (43200, "12h"), 
+            (86400, "24h"),
+            (604800, "7d"),
+            (2592000, "30d"), // 30 days in seconds
+        ];
+        
+        for (seconds, label) in periods {
+            let time_ago = current_time - seconds;
+            
+            let mut stmt = conn.prepare(
+                "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+            )?;
+            
+            let rows = stmt.query_map([crypto, &time_ago.to_string()], |row| {
+                Ok(row.get(0)?)
+            })?;
+            
+            let mut prices = rows.collect::<Result<Vec<f64>, _>>()?;
+            
+            // Only add the change if we have data for that time period
+            if let Some(old_price) = prices.pop() {
+                let change_percent = calculate_percentage_change(current_price, old_price)?;
+                let arrow = get_change_arrow(change_percent);
+                let sign = if change_percent >= 0.0 { "+" } else { "" };
+                changes.push(format!("{} {}{:.2}% ({})", arrow, sign, change_percent, label));
+            }
+        }
+        
+        if changes.is_empty() {
+            Ok("🔄 Building history".to_string())
+        } else {
+            Ok(format!(" {}", changes.join(" | ")))
+        }
+    }
+
+    /// Get price indicator from database for status display
+    pub fn get_price_indicator(&self, crypto_name: &str, current_price: f64) -> (String, f64) {
+        let current_time = match get_current_timestamp() {
+            Ok(time) => time,
+            Err(_) => return ("🔄".to_string(), 0.0),
+        };
+        
+        let conn = match self.get_connection() {
+            Ok(conn) => conn,
+            Err(_) => return ("🔄".to_string(), 0.0),
+        };
+        
+        let mut stmt = match conn.prepare(
+            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return ("🔄".to_string(), 0.0),
+        };
+        
+        let one_hour_ago = current_time - 3600; // 1 hour
+        let rows = match stmt.query_map([crypto_name, &one_hour_ago.to_string()], |row| {
+            Ok(row.get(0)?)
+        }) {
+            Ok(rows) => rows,
+            Err(_) => return ("🔄".to_string(), 0.0),
+        };
+        
+        let mut prices = match rows.collect::<Result<Vec<f64>, _>>() {
+            Ok(prices) => prices,
+            Err(_) => return ("🔄".to_string(), 0.0),
+        };
+        
+        if let Some(oldest_price) = prices.pop() {
+            match calculate_percentage_change(current_price, oldest_price) {
+                Ok(change_percent) => {
+                    let arrow = get_change_arrow(change_percent);
+                    return (arrow.to_string(), change_percent);
+                }
+                Err(_) => return ("🔄".to_string(), 0.0),
+            }
+        }
+        
+        // No history yet
+        ("🔄".to_string(), 0.0)
+    }
+
+    /// Clean up old price records from the database
+    pub fn cleanup_old_prices(&self) -> BotResult<()> {
+        let conn = self.get_connection()?;
+        
+        // Keep only the last 60 days of data
+        let cutoff_time = get_current_timestamp()? - (PRICE_HISTORY_DAYS * 24 * 3600);
+        
+        let deleted = conn.execute(
+            "DELETE FROM prices WHERE timestamp < ?",
+            [&cutoff_time.to_string()]
+        )?;
+        
+        if deleted > 0 {
+            info!("Cleaned up {} old price records from database", deleted);
+        }
+        
+        Ok(())
+    }
+
+    /// Perform periodic cleanup if needed
+    pub fn maybe_cleanup(&self) {
+        static LAST_CLEANUP: AtomicU64 = AtomicU64::new(0);
+        
+        if let Ok(current_time) = get_current_timestamp() {
+            let last_cleanup = LAST_CLEANUP.load(Ordering::Relaxed);
+            if current_time - last_cleanup > CLEANUP_INTERVAL_SECONDS {
+                match self.cleanup_old_prices() {
+                    Ok(_) => debug!("Database cleanup completed"),
+                    Err(e) => error!("Failed to cleanup old prices: {}", e),
+                }
+                LAST_CLEANUP.store(current_time, Ordering::Relaxed);
+            }
+        }
+    }
+}

@@ -12,17 +12,19 @@ use rusqlite::{Connection, Result as SqliteResult};
 const HERMES_API_URL: &str = "https://hermes.pyth.network/api/latest_price_feeds";
 const DATABASE_PATH: &str = "shared/prices.db";
 
-#[derive(serde::Serialize)]
-struct PriceData {
-    price: f64,
-    timestamp: u64,
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PriceData {
+    pub price: f64,
+    pub timestamp: u64,
 }
 
-#[derive(serde::Serialize)]
-struct PricesFile {
-    prices: HashMap<String, PriceData>,
-    timestamp: u64,
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PricesFile {
+    pub prices: HashMap<String, PriceData>,
+    pub timestamp: u64,
 }
+
+
 
 fn init_database() -> SqliteResult<Connection> {
     // Create shared directory if it doesn't exist
