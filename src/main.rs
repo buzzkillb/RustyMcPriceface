@@ -1,6 +1,8 @@
 mod errors;
 mod config;
 mod utils;
+mod health;
+mod health_server;
 
 use errors::{BotError, BotResult};
 use config::{BotConfig, CLEANUP_INTERVAL_SECONDS, PRICE_HISTORY_DAYS};
@@ -8,6 +10,7 @@ use utils::{
     validate_crypto_name, get_current_timestamp, format_price, get_crypto_emoji,
     validate_price, calculate_percentage_change, get_change_arrow
 };
+use health::HealthState;
 
 use serenity::{
     async_trait,
@@ -22,7 +25,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use std::sync::Arc;
 use dotenv::dotenv;
-use std::time::{SystemTime, UNIX_EPOCH};
+
 use serenity::all::ActivityData;
 use std::fs;
 use reqwest;
@@ -31,8 +34,12 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn, error, debug};
+use std::sync::Mutex;
 
 const TRACKING_DURATION_SECONDS: u64 = 3600; // 1 hour
+const MAX_RETRIES: u32 = 3;
+const RATE_LIMIT_DELAY_MS: u64 = 2000; // 2 seconds between Discord API calls
+const RECONNECT_DELAY_SECONDS: u64 = 30;
 
 #[derive(serde::Deserialize)]
 struct PriceData {
@@ -51,12 +58,14 @@ struct PricesFile {
 #[derive(Debug)]
 pub struct Bot {
     config: BotConfig,
+    health: HealthState,
 }
 
 impl Bot {
     /// Create a new bot instance with configuration
     pub fn new(config: BotConfig) -> Self {
-        Self { config }
+        let health = HealthState::new(config.crypto_name.clone());
+        Self { config, health }
     }
 
     /// Register slash commands with Discord
@@ -169,45 +178,79 @@ impl Bot {
 
 // These functions are now handled by the BotConfig struct
 
-/// Fetch individual cryptocurrency price from Pyth Network
+/// Fetch individual cryptocurrency price from Pyth Network with retry logic
 async fn get_individual_crypto_price(feed_id: &str) -> BotResult<f64> {
     let url = format!("https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D={}", feed_id);
     
-    let client = reqwest::Client::new();
-    let response = client.get(&url)
-        .header("User-Agent", "Crypto-Price-Bot/1.0")
-        .send()
-        .await.map_err(|e| BotError::Http(e.to_string()))?;
-    
-    if !response.status().is_success() {
-        return Err(BotError::Http(format!("HTTP request failed: {}", response.status()).into()));
+    for attempt in 1..=MAX_RETRIES {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| BotError::Http(e.to_string()))?;
+            
+        match client.get(&url)
+            .header("User-Agent", "Crypto-Price-Bot/1.0")
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    error!("HTTP request failed (attempt {}): {}", attempt, response.status());
+                    if attempt < MAX_RETRIES {
+                        sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(BotError::Http(format!("HTTP request failed: {}", response.status())));
+                }
+                
+                match response.json::<Value>().await {
+                    Ok(json) => {
+                        // Parse the price from the parsed array
+                        let parsed_data = json.get("parsed")
+                            .and_then(|p| p.as_array())
+                            .ok_or_else(|| BotError::Parse("No parsed data found".into()))?;
+                        
+                        let first_feed = parsed_data.first()
+                            .ok_or_else(|| BotError::Parse("No feed data found".into()))?;
+                        
+                        let price_data = first_feed.get("price")
+                            .ok_or_else(|| BotError::Parse("No price data found".into()))?;
+                        
+                        let price_str = price_data.get("price")
+                            .and_then(|p| p.as_str())
+                            .ok_or_else(|| BotError::Parse("No price string found".into()))?;
+                        
+                        let price = price_str.parse::<i64>()
+                            .map_err(|_| BotError::Parse("Invalid price format".into()))?;
+                        
+                        let expo = price_data.get("expo").and_then(|e| e.as_i64()).unwrap_or(0);
+                        let real_price = price as f64 * 10f64.powi(expo as i32);
+                        
+                        validate_price(real_price)?;
+                        return Ok(real_price);
+                    }
+                    Err(e) => {
+                        error!("JSON parsing failed (attempt {}): {}", attempt, e);
+                        if attempt < MAX_RETRIES {
+                            sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                            continue;
+                        }
+                        return Err(BotError::Http(e.to_string()));
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Network request failed (attempt {}): {}", attempt, e);
+                if attempt < MAX_RETRIES {
+                    sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(BotError::Http(e.to_string()));
+            }
+        }
     }
     
-    let json: Value = response.json().await.map_err(|e| BotError::Http(e.to_string()))?;
-    
-    // Parse the price from the parsed array
-    let parsed_data = json.get("parsed")
-        .and_then(|p| p.as_array())
-        .ok_or_else(|| BotError::Parse("No parsed data found".into()))?;
-    
-    let first_feed = parsed_data.first()
-        .ok_or_else(|| BotError::Parse("No feed data found".into()))?;
-    
-    let price_data = first_feed.get("price")
-        .ok_or_else(|| BotError::Parse("No price data found".into()))?;
-    
-    let price_str = price_data.get("price")
-        .and_then(|p| p.as_str())
-        .ok_or_else(|| BotError::Parse("No price string found".into()))?;
-    
-    let price = price_str.parse::<i64>()
-        .map_err(|_| BotError::Parse("Invalid price format".into()))?;
-    
-    let expo = price_data.get("expo").and_then(|e| e.as_i64()).unwrap_or(0);
-    let real_price = price as f64 * 10f64.powi(expo as i32);
-    
-    validate_price(real_price)?;
-    Ok(real_price)
+    unreachable!()
 }
 
 fn format_about_me(current_price: f64, shared_prices: &PricesFile, config: &BotConfig) -> String {
@@ -254,10 +297,22 @@ fn format_about_me(current_price: f64, shared_prices: &PricesFile, config: &BotC
 // These functions are now in utils.rs
 
 // Database functions for slash commands
-/// Get a database connection
+/// Get a database connection with retry logic
 fn get_db_connection() -> BotResult<Connection> {
-    Connection::open("shared/prices.db")
-        .map_err(BotError::Database)
+    for attempt in 1..=MAX_RETRIES {
+        match Connection::open("shared/prices.db") {
+            Ok(conn) => return Ok(conn),
+            Err(e) => {
+                error!("Database connection attempt {} failed: {}", attempt, e);
+                if attempt < MAX_RETRIES {
+                    std::thread::sleep(Duration::from_millis(1000 * attempt as u64));
+                } else {
+                    return Err(BotError::Database(e));
+                }
+            }
+        }
+    }
+    unreachable!()
 }
 
 fn get_latest_prices() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -410,27 +465,51 @@ fn cleanup_old_prices() -> BotResult<()> {
 impl EventHandler for Bot {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!("Bot is ready! Logged in as: {}", ready.user.name);
+        info!("Bot ID: {}", ready.user.id);
+        info!("Connected to {} guilds", ready.guilds.len());
+        
         info!("Starting command registration...");
         
-        // Register slash commands
-        if let Err(e) = self.register_commands(&ctx.http).await {
-            error!("Command registration failed: {}", e);
-            return;
+        // Register slash commands with retry logic
+        for attempt in 1..=MAX_RETRIES {
+            match self.register_commands(&ctx.http).await {
+                Ok(_) => {
+                    info!("Command registration completed successfully");
+                    break;
+                }
+                Err(e) => {
+                    error!("Command registration failed (attempt {}): {}", attempt, e);
+                    if attempt < MAX_RETRIES {
+                        sleep(Duration::from_secs(5)).await;
+                    } else {
+                        error!("Failed to register commands after {} attempts", MAX_RETRIES);
+                        return;
+                    }
+                }
+            }
         }
         
-        info!("Command registration completed successfully");
         info!("Starting price update loop...");
         
         let http = ctx.http.clone();
         let ctx_arc = Arc::new(ctx);
         let config = self.config.clone();
+        let health = Arc::new(self.health.clone());
+        
+        // Start health check server
+        let health_clone = health.clone();
+        tokio::spawn(async move {
+            health_server::start_health_server(health_clone, 8080).await;
+        });
         
         tokio::spawn(async move {
-            price_update_loop(http, ctx_arc, config).await;
+            price_update_loop(http, ctx_arc, config, health).await;
         });
         
         info!("Bot initialization complete!");
     }
+
+
 
     async fn interaction_create(&self, ctx: Context, interaction: serenity::model::application::Interaction) {
         debug!("Interaction received: {:?}", interaction.kind());
@@ -471,21 +550,108 @@ impl EventHandler for Bot {
     }
 }
 
-/// Read prices from the shared JSON file
+/// Rate-limited Discord API call helper
+async fn rate_limited_discord_call<F, Fut, T>(mut operation: F) -> Result<T, serenity::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, serenity::Error>>,
+{
+    static LAST_CALL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    
+    // Enforce rate limiting
+    let sleep_time = {
+        let mut last_call = LAST_CALL.lock().unwrap();
+        let now = std::time::Instant::now();
+        
+        if let Some(last) = *last_call {
+            let elapsed = last.elapsed();
+            let min_interval = Duration::from_millis(RATE_LIMIT_DELAY_MS);
+            if elapsed < min_interval {
+                let sleep_duration = min_interval - elapsed;
+                *last_call = Some(now);
+                Some(sleep_duration)
+            } else {
+                *last_call = Some(now);
+                None
+            }
+        } else {
+            *last_call = Some(now);
+            None
+        }
+    };
+    
+    // Sleep outside the mutex lock if needed
+    if let Some(duration) = sleep_time {
+        debug!("Rate limiting: sleeping for {:?}", duration);
+        sleep(duration).await;
+    }
+    
+    // Execute the operation with retry logic
+    for attempt in 1..=MAX_RETRIES {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                if e.to_string().contains("rate limit") || e.to_string().contains("429") {
+                    let backoff_time = Duration::from_secs(2_u64.pow(attempt));
+                    warn!("Rate limited, backing off for {:?} (attempt {})", backoff_time, attempt);
+                    sleep(backoff_time).await;
+                } else if attempt < MAX_RETRIES {
+                    warn!("Discord API call failed (attempt {}): {}", attempt, e);
+                    sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    
+    unreachable!()
+}
+
+/// Read prices from the shared JSON file with retry logic
 async fn read_prices_from_file() -> BotResult<PricesFile> {
     let file_path = "shared/prices.json";
     
-    // Check if file exists
-    if !std::path::Path::new(file_path).exists() {
-        return Err(BotError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Prices file not found. Make sure price-service is running."
-        )));
+    for attempt in 1..=MAX_RETRIES {
+        // Check if file exists
+        if !std::path::Path::new(file_path).exists() {
+            if attempt < MAX_RETRIES {
+                warn!("Prices file not found (attempt {}), retrying...", attempt);
+                sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                continue;
+            }
+            return Err(BotError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Prices file not found. Make sure price-service is running."
+            )));
+        }
+        
+        match fs::read_to_string(file_path) {
+            Ok(content) => {
+                match serde_json::from_str::<PricesFile>(&content) {
+                    Ok(prices) => return Ok(prices),
+                    Err(e) => {
+                        error!("Failed to parse prices file (attempt {}): {}", attempt, e);
+                        if attempt < MAX_RETRIES {
+                            sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                            continue;
+                        }
+                        return Err(BotError::Json(e));
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to read prices file (attempt {}): {}", attempt, e);
+                if attempt < MAX_RETRIES {
+                    sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(BotError::Io(e));
+            }
+        }
     }
     
-    let content = fs::read_to_string(file_path)?;
-    let prices: PricesFile = serde_json::from_str(&content)?;
-    Ok(prices)
+    unreachable!()
 }
 
 /// Get current cryptocurrency price
@@ -558,34 +724,64 @@ fn get_price_indicator_from_db(crypto_name: &str, current_price: f64) -> (String
     ("🔄".to_string(), 0.0)
 }
 
-/// Main price update loop
-async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, config: BotConfig) {
+/// Main price update loop with comprehensive error handling
+async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, config: BotConfig, health: Arc<HealthState>) {
     let crypto_name = &config.crypto_name;
+    let mut consecutive_failures = 0;
+    const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+    
+    info!("Starting price update loop for {}", crypto_name);
     
     loop {
-        match get_crypto_price(&config).await {
-            Ok(current_price) => {
-                // Get price change over last hour from database
-                let (arrow, change_percent) = get_price_indicator_from_db(crypto_name, current_price);
-                
-                // Format the nickname (just the price)
-                let nickname = format!("{} {}", crypto_name, format_price(current_price));
-                
-                // Format the custom status with rotation
-                let update_count = match get_current_timestamp() {
-                    Ok(time) => (time / 12) % 4,
-                    Err(_) => 0,
-                };
-                
-                let custom_status = if let Ok(shared_prices) = read_prices_from_file().await {
+        let loop_start = std::time::Instant::now();
+        
+        // Wrap the entire update logic in error handling
+        let update_result = async {
+            // Get current price with error handling
+            let current_price = match get_crypto_price(&config).await {
+                Ok(price) => {
+                    consecutive_failures = 0; // Reset failure counter on success
+                    health.reset_failures();
+                    health.update_price_timestamp();
+                    price
+                }
+                Err(e) => {
+                    consecutive_failures += 1;
+                    health.increment_failures();
+                    error!("Failed to get {} price (failure {}/{}): {}", 
+                           crypto_name, consecutive_failures, MAX_CONSECUTIVE_FAILURES, e);
+                    
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        error!("Too many consecutive failures for {}. Entering recovery mode.", crypto_name);
+                        sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
+                        consecutive_failures = 0; // Reset after recovery delay
+                        health.reset_failures();
+                    }
+                    return Err(e);
+                }
+            };
+
+            // Get price change indicator with error handling
+            let (arrow, change_percent) = get_price_indicator_from_db(crypto_name, current_price);
+
+            // Format the nickname
+            let nickname = format!("{} {}", crypto_name, format_price(current_price));
+
+            // Format the custom status with rotation
+            let update_count = match get_current_timestamp() {
+                Ok(time) => (time / 12) % 4,
+                Err(_) => 0,
+            };
+
+            let custom_status = match read_prices_from_file().await {
+                Ok(shared_prices) => {
                     // Calculate ticker price in terms of BTC, ETH, SOL
                     let btc_amount = current_price / shared_prices.prices.get("BTC").map(|p| p.price).unwrap_or(45000.0);
                     let eth_amount = current_price / shared_prices.prices.get("ETH").map(|p| p.price).unwrap_or(2800.0);
                     let sol_amount = current_price / shared_prices.prices.get("SOL").map(|p| p.price).unwrap_or(95.0);
-                    
+
                     match crypto_name.as_str() {
                         "BTC" => {
-                            // For BTC bot, show ETH and SOL amounts, skip BTC/BTC
                             match update_count {
                                 0 => {
                                     if change_percent == 0.0 && arrow == "🔄" {
@@ -597,12 +793,11 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, config: BotConfig
                                 },
                                 1 => format!("{:.8} Ξ", eth_amount),
                                 2 => format!("{:.8} ◎", sol_amount),
-                                3 => format!("{:.8} Ξ", eth_amount), // Repeat ETH since we skip BTC
+                                3 => format!("{:.8} Ξ", eth_amount),
                                 _ => unreachable!(),
                             }
                         },
                         "ETH" => {
-                            // For ETH bot, show BTC and SOL amounts, skip ETH/ETH
                             match update_count {
                                 0 => {
                                     if change_percent == 0.0 && arrow == "🔄" {
@@ -614,12 +809,11 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, config: BotConfig
                                 },
                                 1 => format!("{:.8} ₿", btc_amount),
                                 2 => format!("{:.8} ◎", sol_amount),
-                                3 => format!("{:.8} ₿", btc_amount), // Repeat BTC since we skip ETH
+                                3 => format!("{:.8} ₿", btc_amount),
                                 _ => unreachable!(),
                             }
                         },
                         "SOL" => {
-                            // For SOL bot, show BTC and ETH amounts, skip SOL/SOL
                             match update_count {
                                 0 => {
                                     if change_percent == 0.0 && arrow == "🔄" {
@@ -631,12 +825,11 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, config: BotConfig
                                 },
                                 1 => format!("{:.8} ₿", btc_amount),
                                 2 => format!("{:.8} Ξ", eth_amount),
-                                3 => format!("{:.8} ₿", btc_amount), // Repeat BTC since we skip SOL
+                                3 => format!("{:.8} ₿", btc_amount),
                                 _ => unreachable!(),
                             }
                         },
                         _ => {
-                            // For other tickers, show all three conversions
                             match update_count {
                                 0 => {
                                     if change_percent == 0.0 && arrow == "🔄" {
@@ -653,73 +846,120 @@ async fn price_update_loop(http: Arc<Http>, ctx: Arc<Context>, config: BotConfig
                             }
                         }
                     }
-                } else {
-                    // Fallback if shared prices not available
+                }
+                Err(e) => {
+                    warn!("Failed to read shared prices for status: {}", e);
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
                         format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
                     }
-                };
-                
-                debug!("Updating nickname to: {}", nickname);
-                debug!("Updating custom status to: {}", custom_status);
-                
-                // Update custom status (activity)
-                ctx.set_activity(Some(ActivityData::playing(custom_status)));
-                
-                // Update "About Me" with cross-rates
-                if let Ok(shared_prices) = read_prices_from_file().await {
-                    let about_me = format_about_me(current_price, &shared_prices, &config);
-                    // Note: Discord bot profiles can't be updated via API
-                    // This would require OAuth2 user token, not bot token
-                    debug!("About Me would be: {}", about_me);
                 }
-                
-                // Save current price to database for history
-                if let Ok(conn) = get_db_connection() {
+            };
+
+            debug!("Updating nickname to: {}", nickname);
+            debug!("Updating custom status to: {}", custom_status);
+
+            // Update custom status (activity) with error handling
+            ctx.set_activity(Some(ActivityData::playing(custom_status.clone())));
+            debug!("Updated activity status");
+
+            // Save current price to database with error handling
+            match get_db_connection() {
+                Ok(conn) => {
                     if let Ok(current_time) = get_current_timestamp() {
-                        if let Ok(mut stmt) = conn.prepare(
-                            "INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)"
-                        ) {
-                            if let Err(e) = stmt.execute([crypto_name, &current_price.to_string(), &current_time.to_string()]) {
-                                error!("Failed to save price to database: {}", e);
+                        match conn.prepare("INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)") {
+                            Ok(mut stmt) => {
+                                if let Err(e) = stmt.execute([crypto_name, &current_price.to_string(), &current_time.to_string()]) {
+                                    error!("Failed to save price to database: {}", e);
+                                } else {
+                                    debug!("Saved {} price to database: ${}", crypto_name, current_price);
+                                    health.update_db_timestamp();
+                                }
+                            }
+                            Err(e) => error!("Failed to prepare database statement: {}", e),
+                        }
+                    }
+                }
+                Err(e) => error!("Failed to get database connection: {}", e),
+            }
+
+            // Update nickname in guilds with rate limiting and error handling
+            let guilds = ctx.cache.guilds();
+            let guild_count = guilds.len();
+            
+            if guild_count > 0 {
+                info!("Updating nickname in {} guilds", guild_count);
+                
+                for (index, guild_id) in guilds.iter().enumerate() {
+                    let http_clone = http.clone();
+                    let nickname_clone = nickname.clone();
+                    let guild_id_copy = *guild_id;
+                    
+                    match rate_limited_discord_call(|| {
+                        let http_ref = http_clone.clone();
+                        let nickname_ref = nickname_clone.clone();
+                        async move {
+                            http_ref.edit_nickname(guild_id_copy, Some(&nickname_ref), None).await
+                        }
+                    }).await {
+                        Ok(_) => {
+                            debug!("Updated nickname in guild {} ({}/{})", guild_id, index + 1, guild_count);
+                            health.update_discord_timestamp();
+                        }
+                        Err(e) => {
+                            if e.to_string().contains("rate limit") || e.to_string().contains("429") {
+                                warn!("Rate limited while updating nickname in guild {}: {}", guild_id, e);
                             } else {
-                                debug!("Saved {} price to database: ${}", crypto_name, current_price);
+                                warn!("Failed to update nickname in guild {}: {}", guild_id, e);
                             }
                         }
                     }
                 }
-                
-                // Iterate over all guilds and update nickname
-                let guilds = ctx.cache.guilds();
-                for guild_id in guilds {
-                    match http.edit_nickname(guild_id, Some(&nickname), None).await {
-                        Ok(_) => debug!("Updated nickname in guild {}", guild_id),
-                        Err(e) => warn!("Failed to update nickname in guild {}: {}", guild_id, e),
-                    }
-                }
+            } else {
+                debug!("No guilds found in cache");
+            }
+
+            Ok(())
+        }.await;
+
+        // Handle update result
+        match update_result {
+            Ok(_) => {
+                debug!("Price update completed successfully for {}", crypto_name);
             }
             Err(e) => {
-                error!("Failed to get {} price: {}", crypto_name, e);
+                error!("Price update failed for {}: {}", crypto_name, e);
             }
         }
-        
-                                // Periodic cleanup of old prices (every 24 hours)
+
+        // Periodic cleanup of old prices (every 24 hours)
         static LAST_CLEANUP: AtomicU64 = AtomicU64::new(0);
         if let Ok(current_time) = get_current_timestamp() {
             let last_cleanup = LAST_CLEANUP.load(Ordering::Relaxed);
             if current_time - last_cleanup > CLEANUP_INTERVAL_SECONDS {
-                if let Err(e) = cleanup_old_prices() {
-                    error!("Failed to cleanup old prices: {}", e);
+                match cleanup_old_prices() {
+                    Ok(_) => debug!("Database cleanup completed"),
+                    Err(e) => error!("Failed to cleanup old prices: {}", e),
                 }
                 LAST_CLEANUP.store(current_time, Ordering::Relaxed);
             }
         }
+
+        // Calculate how long the update took and adjust sleep time
+        let loop_duration = loop_start.elapsed();
+        let target_interval = config.update_interval;
         
-        // Wait for the next update using the configurable interval
-        sleep(config.update_interval).await;
+        if loop_duration < target_interval {
+            let sleep_time = target_interval - loop_duration;
+            debug!("Update took {:?}, sleeping for {:?}", loop_duration, sleep_time);
+            sleep(sleep_time).await;
+        } else {
+            warn!("Update took longer than interval: {:?} > {:?}", loop_duration, target_interval);
+            // Still sleep for a minimum time to prevent tight loops
+            sleep(Duration::from_secs(1)).await;
+        }
     }
 }
 
@@ -745,20 +985,49 @@ async fn main() -> BotResult<()> {
     
     // Create a new instance of the bot
     info!("Creating bot with event handler...");
-    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::GUILDS;
-    let mut client = Client::builder(&config.discord_token, intents)
-        .event_handler(Bot::new(config))
-        .await
-        .map_err(|e| BotError::Discord(format!("Error creating client: {:?}", e)))?;
     
-    info!("Starting bot client...");
-    // Start the bot
-    if let Err(why) = client.start().await {
-        error!("Client error: {:?}", why);
-        return Err(BotError::Discord(format!("Client error: {:?}", why)));
+    // Start the bot with reconnection logic
+    loop {
+        match start_bot_with_reconnection(&config).await {
+            Ok(_) => {
+                info!("Bot exited normally");
+                break;
+            }
+            Err(e) => {
+                error!("Bot crashed: {}", e);
+                error!("Attempting to reconnect in {} seconds...", RECONNECT_DELAY_SECONDS);
+                sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
+            }
+        }
     }
     
     Ok(())
+}
+
+/// Start the bot with proper error handling and reconnection capability
+async fn start_bot_with_reconnection(config: &BotConfig) -> BotResult<()> {
+    let intents = GatewayIntents::GUILDS;
+    
+    let bot = Bot::new(config.clone());
+    
+    let mut client = Client::builder(&config.discord_token, intents)
+        .event_handler(bot)
+        .await
+        .map_err(|e| BotError::Discord(format!("Failed to create client: {}", e)))?;
+    
+    info!("Starting Discord client...");
+    
+    // Start the client with error handling
+    match client.start().await {
+        Ok(_) => {
+            info!("Discord client started successfully");
+            Ok(())
+        }
+        Err(e) => {
+            error!("Discord client error: {}", e);
+            Err(BotError::Discord(format!("Client error: {}", e)))
+        }
+    }
 }
 
 #[cfg(test)]

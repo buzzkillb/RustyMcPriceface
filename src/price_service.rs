@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use dotenv::dotenv;
 use rusqlite::{Connection, Result as SqliteResult};
-use chrono::{DateTime, Utc};
+
 
 const HERMES_API_URL: &str = "https://hermes.pyth.network/api/latest_price_feeds";
 const DATABASE_PATH: &str = "shared/prices.db";
@@ -112,35 +112,68 @@ fn get_feed_ids() -> HashMap<String, String> {
 
 async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}?ids[]={}", HERMES_API_URL, feed_id);
+    const MAX_RETRIES: u32 = 3;
     
-    let client = reqwest::Client::new();
-    let response = client.get(&url)
-        .header("User-Agent", "Crypto-Price-Service/1.0")
-        .send()
-        .await?;
-    
-    if !response.status().is_success() {
-        return Err(format!("HTTP request failed: {}", response.status()).into());
-    }
-    
-    let json: Value = response.json().await?;
-    
-    // Parse the price from the JSON array format
-    if let Some(feeds_array) = json.as_array() {
-        if let Some(first_feed) = feeds_array.first() {
-            if let Some(price_data) = first_feed.get("price") {
-                if let Some(price_str) = price_data.get("price").and_then(|p| p.as_str()) {
-                    if let Ok(price) = price_str.parse::<i64>() {
-                        let expo = price_data.get("expo").and_then(|e| e.as_i64()).unwrap_or(0);
-                        let real_price = price as f64 * 10f64.powi(expo as i32);
-                        return Ok(real_price);
+    for attempt in 1..=MAX_RETRIES {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
+            
+        match client.get(&url)
+            .header("User-Agent", "Crypto-Price-Service/1.0")
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    println!("❌ HTTP request failed (attempt {}): {}", attempt, response.status());
+                    if attempt < MAX_RETRIES {
+                        tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(format!("HTTP request failed: {}", response.status()).into());
+                }
+                
+                match response.json::<Value>().await {
+                    Ok(json) => {
+                        // Parse the price from the JSON array format
+                        if let Some(feeds_array) = json.as_array() {
+                            if let Some(first_feed) = feeds_array.first() {
+                                if let Some(price_data) = first_feed.get("price") {
+                                    if let Some(price_str) = price_data.get("price").and_then(|p| p.as_str()) {
+                                        if let Ok(price) = price_str.parse::<i64>() {
+                                            let expo = price_data.get("expo").and_then(|e| e.as_i64()).unwrap_or(0);
+                                            let real_price = price as f64 * 10f64.powi(expo as i32);
+                                            return Ok(real_price);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Err("Failed to parse price data".into());
+                    }
+                    Err(e) => {
+                        println!("❌ JSON parsing failed (attempt {}): {}", attempt, e);
+                        if attempt < MAX_RETRIES {
+                            tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+                            continue;
+                        }
+                        return Err(e.into());
                     }
                 }
+            }
+            Err(e) => {
+                println!("❌ Network request failed (attempt {}): {}", attempt, e);
+                if attempt < MAX_RETRIES {
+                    tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(e.into());
             }
         }
     }
     
-    Err("Failed to parse price data".into())
+    unreachable!()
 }
 
 async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Send + Sync>> {
@@ -230,12 +263,21 @@ async fn main() {
     
     let mut cleanup_counter = 0;
     
+    let mut consecutive_failures = 0;
+    const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+    
     loop {
+        let loop_start = std::time::Instant::now();
+        
         match fetch_all_prices().await {
             Ok(prices) => {
+                consecutive_failures = 0; // Reset failure counter on success
+                
                 // Store in JSON file (for backward compatibility)
                 if let Err(e) = write_prices_to_file(&prices, &file_path).await {
                     println!("❌ Failed to write prices to JSON: {}", e);
+                } else {
+                    println!("📝 Successfully wrote prices to JSON file");
                 }
                 
                 // Store in SQLite database
@@ -250,15 +292,37 @@ async fn main() {
                 if cleanup_counter >= 100 {
                     if let Err(e) = cleanup_old_prices(&conn) {
                         println!("❌ Failed to cleanup old prices: {}", e);
+                    } else {
+                        println!("🧹 Database cleanup completed");
                     }
                     cleanup_counter = 0;
                 }
             }
             Err(e) => {
-                println!("❌ Failed to fetch prices: {}", e);
+                consecutive_failures += 1;
+                println!("❌ Failed to fetch prices (failure {}/{}): {}", 
+                        consecutive_failures, MAX_CONSECUTIVE_FAILURES, e);
+                
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    println!("⚠️ Too many consecutive failures. Entering recovery mode for 60 seconds...");
+                    sleep(Duration::from_secs(60)).await;
+                    consecutive_failures = 0; // Reset after recovery delay
+                }
             }
         }
         
-        sleep(Duration::from_secs(update_interval)).await;
+        // Calculate how long the update took and adjust sleep time
+        let loop_duration = loop_start.elapsed();
+        let target_interval = Duration::from_secs(update_interval);
+        
+        if loop_duration < target_interval {
+            let sleep_time = target_interval - loop_duration;
+            println!("⏱️ Update took {:?}, sleeping for {:?}", loop_duration, sleep_time);
+            sleep(sleep_time).await;
+        } else {
+            println!("⚠️ Update took longer than interval: {:?} > {:?}", loop_duration, target_interval);
+            // Still sleep for a minimum time to prevent tight loops
+            sleep(Duration::from_secs(1)).await;
+        }
     }
 } 

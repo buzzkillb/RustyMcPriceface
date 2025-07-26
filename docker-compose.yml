@@ -21,6 +21,13 @@ services:
     depends_on:
       - price-service
     restart: unless-stopped
+    ports:
+      - "9081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   fartcoin-bot:
     build: .
@@ -34,6 +41,13 @@ services:
     depends_on:
       - price-service
     restart: unless-stopped
+    ports:
+      - "9084:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   btc-bot:
     build: .
@@ -47,6 +61,72 @@ services:
     depends_on:
       - price-service
     restart: unless-stopped
+    ports:
+      - "9082:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  avax-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_AVAX}
+      - CRYPTO_NAME=AVAX
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9085:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  bnb-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_BNB}
+      - CRYPTO_NAME=BNB
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9086:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  doge-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_DOGE}
+      - CRYPTO_NAME=DOGE
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9087:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   eth-bot:
     build: .
@@ -59,4 +139,191 @@ services:
     command: ["./discord-bot"]
     depends_on:
       - price-service
-    restart: unless-stopped 
+    restart: unless-stopped
+    ports:
+      - "9083:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3 
+
+  jlp-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_JLP}
+      - CRYPTO_NAME=JLP
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9088:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  pump-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_PUMP}
+      - CRYPTO_NAME=PUMP
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9089:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  sei-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_SEI}
+      - CRYPTO_NAME=SEI
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9090:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  sui-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_SUI}
+      - CRYPTO_NAME=SUI
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9091:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mstr-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_MSTR}
+      - CRYPTO_NAME=MSTR
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9092:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  hood-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_HOOD}
+      - CRYPTO_NAME=HOOD
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9093:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  sbet-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_SBET}
+      - CRYPTO_NAME=SBET
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9094:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  gold-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_GOLD}
+      - CRYPTO_NAME=GOLD
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9095:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  silver-bot:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_SILVER}
+      - CRYPTO_NAME=SILVER
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+    command: ["./discord-bot"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9096:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
