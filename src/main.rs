@@ -389,6 +389,7 @@ fn get_price_changes(crypto: &str, current_price: f64) -> BotResult<String> {
         (43200, "12h"), 
         (86400, "24h"),
         (604800, "7d"),
+        (2592000, "30d"), // 30 days in seconds
     ];
     
     for (seconds, label) in periods {
@@ -404,6 +405,7 @@ fn get_price_changes(crypto: &str, current_price: f64) -> BotResult<String> {
         
         let mut prices = rows.collect::<Result<Vec<f64>, _>>()?;
         
+        // Only add the change if we have data for that time period
         if let Some(old_price) = prices.pop() {
             let change_percent = calculate_percentage_change(current_price, old_price)?;
             let arrow = get_change_arrow(change_percent);
@@ -446,7 +448,7 @@ fn get_database_stats() -> Result<String, Box<dyn std::error::Error + Send + Syn
 fn cleanup_old_prices() -> BotResult<()> {
     let conn = get_db_connection()?;
     
-    // Keep only the last 7 days of data
+    // Keep only the last 60 days of data
     let cutoff_time = get_current_timestamp()? - (PRICE_HISTORY_DAYS * 24 * 3600);
     
     let deleted = conn.execute(

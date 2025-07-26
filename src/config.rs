@@ -61,4 +61,4 @@ impl BotConfig {
 
 /// Constants for the application
 pub const CLEANUP_INTERVAL_SECONDS: u64 = 86400; // 24 hours
-pub const PRICE_HISTORY_DAYS: u64 = 7; // Keep 7 days of history 
+pub const PRICE_HISTORY_DAYS: u64 = 60; // Keep 60 days of history 

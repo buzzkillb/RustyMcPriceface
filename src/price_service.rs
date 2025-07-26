@@ -73,19 +73,19 @@ fn store_prices_in_db(conn: &Connection, prices: &HashMap<String, PriceData>) ->
 }
 
 fn cleanup_old_prices(conn: &Connection) -> SqliteResult<()> {
-    // Delete prices older than 30 days (30 * 24 * 60 * 60 = 2592000 seconds)
-    let thirty_days_ago = std::time::SystemTime::now()
+    // Delete prices older than 60 days (60 * 24 * 60 * 60 = 5184000 seconds)
+    let sixty_days_ago = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() - 2592000;
+        .as_secs() - 5184000;
     
     let deleted = conn.execute(
         "DELETE FROM prices WHERE timestamp < ?",
-        [&thirty_days_ago.to_string()],
+        [&sixty_days_ago.to_string()],
     )?;
     
     if deleted > 0 {
-        println!("🧹 Cleaned up {} old price records (older than 30 days)", deleted);
+        println!("🧹 Cleaned up {} old price records (older than 60 days)", deleted);
     }
     
     Ok(())
