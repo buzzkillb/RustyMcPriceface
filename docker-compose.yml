@@ -9,6 +9,25 @@ services:
     command: ["./price-service"]
     restart: unless-stopped
 
+  db-cleanup:
+    build: .
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - CLEANUP_INTERVAL_HOURS=${CLEANUP_INTERVAL_HOURS:-24}
+      - RUST_LOG=info
+    command: ["./db-cleanup"]
+    depends_on:
+      - price-service
+    restart: unless-stopped
+    ports:
+      - "9097:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
   sol-bot:
     build: .
     volumes:

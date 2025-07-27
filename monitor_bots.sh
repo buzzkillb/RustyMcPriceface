@@ -25,6 +25,7 @@ declare -A BOTS=(
     ["sbet-bot"]="9094"
     ["gold-bot"]="9095"
     ["silver-bot"]="9096"
+    ["db-cleanup"]="9097"
 )
 
 # Colors for output

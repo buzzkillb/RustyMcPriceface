@@ -89,6 +89,7 @@ else
         "sbet-bot") PORT=9094 ;;
         "gold-bot") PORT=9095 ;;
         "silver-bot") PORT=9096 ;;
+        "db-cleanup") PORT=9097 ;;
         *) PORT="" ;;
     esac
     

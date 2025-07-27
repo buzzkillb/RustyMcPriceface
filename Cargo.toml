@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "db-query"
 path = "src/db_query.rs"
 
+[[bin]]
+name = "db-cleanup"
+path = "src/db_cleanup.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }

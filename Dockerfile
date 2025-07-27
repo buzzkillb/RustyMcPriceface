@@ -13,9 +13,10 @@ WORKDIR /app
 COPY target/release/price-service /app/price-service
 COPY target/release/discord-bot /app/discord-bot
 COPY target/release/db-query /app/db-query
+COPY target/release/db-cleanup /app/db-cleanup
 
 # Make binaries executable
-RUN chmod +x /app/price-service /app/discord-bot /app/db-query
+RUN chmod +x /app/price-service /app/discord-bot /app/db-query /app/db-cleanup
 
 # Create shared directory for price data
 RUN mkdir -p /app/shared

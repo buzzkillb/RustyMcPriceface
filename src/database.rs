@@ -53,7 +53,7 @@ impl PriceDatabase {
         Ok(())
     }
 
-    /// Get price changes for different time periods
+    /// Get price changes for different time periods (works with both raw and aggregated data)
     pub fn get_price_changes(&self, crypto: &str, current_price: f64) -> BotResult<String> {
         validate_crypto_name(crypto)?;
         validate_price(current_price)?;
@@ -75,19 +75,24 @@ impl PriceDatabase {
         for (seconds, label) in periods {
             let time_ago = current_time - seconds;
             
-            let mut stmt = conn.prepare(
-                "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
-            )?;
-            
-            let rows = stmt.query_map([crypto, &time_ago.to_string()], |row| {
-                Ok(row.get(0)?)
-            })?;
-            
-            let mut prices = rows.collect::<Result<Vec<f64>, _>>()?;
+            // Try to get price from appropriate data source based on age
+            let old_price = if seconds <= 24 * 3600 {
+                // For recent data (< 24h), use raw prices table
+                self.get_price_from_raw_data(&conn, crypto, time_ago)?
+            } else if seconds <= 7 * 24 * 3600 {
+                // For 1-7 days old, use 1-minute aggregates
+                self.get_price_from_aggregates(&conn, crypto, time_ago, 60)?
+            } else if seconds <= 30 * 24 * 3600 {
+                // For 7-30 days old, use 5-minute aggregates
+                self.get_price_from_aggregates(&conn, crypto, time_ago, 300)?
+            } else {
+                // For older data, use 15-minute aggregates
+                self.get_price_from_aggregates(&conn, crypto, time_ago, 900)?
+            };
             
             // Only add the change if we have data for that time period
-            if let Some(old_price) = prices.pop() {
-                let change_percent = calculate_percentage_change(current_price, old_price)?;
+            if let Some(price) = old_price {
+                let change_percent = calculate_percentage_change(current_price, price)?;
                 let arrow = get_change_arrow(change_percent);
                 let sign = if change_percent >= 0.0 { "+" } else { "" };
                 changes.push(format!("{} {}{:.2}% ({})", arrow, sign, change_percent, label));
@@ -99,6 +104,36 @@ impl PriceDatabase {
         } else {
             Ok(format!(" {}", changes.join(" | ")))
         }
+    }
+
+    /// Get price from raw data table
+    fn get_price_from_raw_data(&self, conn: &Connection, crypto: &str, time_ago: u64) -> BotResult<Option<f64>> {
+        let mut stmt = conn.prepare(
+            "SELECT price FROM prices WHERE crypto_name = ? AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1"
+        )?;
+        
+        let rows = stmt.query_map([crypto, &time_ago.to_string()], |row| {
+            Ok(row.get(0)?)
+        })?;
+        
+        let mut prices = rows.collect::<Result<Vec<f64>, _>>()?;
+        Ok(prices.pop())
+    }
+
+    /// Get price from aggregated data table
+    fn get_price_from_aggregates(&self, conn: &Connection, crypto: &str, time_ago: u64, bucket_duration: u64) -> BotResult<Option<f64>> {
+        let mut stmt = conn.prepare(
+            "SELECT open_price FROM price_aggregates 
+             WHERE crypto_name = ? AND bucket_start <= ? AND bucket_duration = ?
+             ORDER BY bucket_start ASC LIMIT 1"
+        )?;
+        
+        let rows = stmt.query_map([crypto, &time_ago.to_string(), &bucket_duration.to_string()], |row| {
+            Ok(row.get(0)?)
+        })?;
+        
+        let mut prices = rows.collect::<Result<Vec<f64>, _>>()?;
+        Ok(prices.pop())
     }
 
     /// Get price indicator from database for status display

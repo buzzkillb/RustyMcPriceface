@@ -61,4 +61,10 @@ impl BotConfig {
 
 /// Constants for the application
 pub const CLEANUP_INTERVAL_SECONDS: u64 = 86400; // 24 hours
-pub const PRICE_HISTORY_DAYS: u64 = 60; // Keep 60 days of history 
+pub const PRICE_HISTORY_DAYS: u64 = 365; // Keep 1 year of history
+
+/// Data retention tiers for aggregation
+pub const RAW_DATA_RETENTION_HOURS: u64 = 24; // Keep raw 15-second data for 24 hours
+pub const MINUTE_DATA_RETENTION_DAYS: u64 = 7; // Keep 1-minute data for 7 days  
+pub const FIVE_MINUTE_DATA_RETENTION_DAYS: u64 = 30; // Keep 5-minute data for 30 days
+pub const FIFTEEN_MINUTE_DATA_RETENTION_DAYS: u64 = 365; // Keep 15-minute data for 1 year 
