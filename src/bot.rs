@@ -6,7 +6,7 @@ use crate::health::HealthState;
 use crate::health_server;
 use crate::price_service::PricesFile;
 use crate::utils::{
-    format_price, get_crypto_emoji, get_current_timestamp, validate_crypto_name, validate_price,
+    format_price, get_current_timestamp, validate_crypto_name, validate_price,
 };
 use serenity::{
     all::{
@@ -119,7 +119,6 @@ impl Bot {
 
         validate_price(price_data.price)?;
 
-        let emoji = get_crypto_emoji(&crypto_name);
         let formatted_price = format_price(price_data.price);
 
         info!("{} price: ${}", crypto_name, price_data.price);
@@ -132,8 +131,8 @@ impl Bot {
 
         // Build the main response
         let mut response = format!(
-            "{} {}: {} {}",
-            emoji, crypto_name, formatted_price, change_info
+            "{}: {} {}",
+            crypto_name, formatted_price, change_info
         );
 
         // Add prices in terms of BTC, ETH, and SOL (excluding the crypto's own price)
