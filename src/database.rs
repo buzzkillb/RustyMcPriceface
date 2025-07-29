@@ -21,11 +21,21 @@ impl PriceDatabase {
         }
     }
 
-    /// Get a database connection with retry logic
+    /// Get a database connection with retry logic and WAL mode for better concurrency
     pub fn get_connection(&self) -> BotResult<Connection> {
         for attempt in 1..=MAX_RETRIES {
             match Connection::open(&self.db_path) {
-                Ok(conn) => return Ok(conn),
+                Ok(conn) => {
+                    // Enable WAL mode for better concurrent access
+                    if let Err(e) = conn.pragma_update(None, "journal_mode", "WAL") {
+                        error!("Failed to enable WAL mode: {}", e);
+                    }
+                    // Set busy timeout to handle locks better (30 seconds)
+                    if let Err(e) = conn.pragma_update(None, "busy_timeout", 30000) {
+                        error!("Failed to set busy timeout: {}", e);
+                    }
+                    return Ok(conn);
+                },
                 Err(e) => {
                     error!("Database connection attempt {} failed: {}", attempt, e);
                     if attempt < MAX_RETRIES {
