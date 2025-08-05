@@ -43,10 +43,11 @@ services:
     ports:
       - "9081:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:8080/health | jq -e '.healthy == true'"]
+      interval: 60s
       timeout: 10s
-      retries: 3
+      retries: 2
+      start_period: 40s
 
   fartcoin-bot:
     build: .
@@ -242,10 +243,11 @@ services:
     ports:
       - "9091:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:8080/health | jq -e '.healthy == true'"]
+      interval: 60s
       timeout: 10s
-      retries: 3
+      retries: 2
+      start_period: 40s
 
   mstr-bot:
     build: .
@@ -342,7 +344,8 @@ services:
     ports:
       - "9096:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:8080/health | jq -e '.healthy == true'"]
+      interval: 60s
       timeout: 10s
-      retries: 3
+      retries: 2
+      start_period: 40s

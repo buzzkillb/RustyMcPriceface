@@ -206,6 +206,9 @@ impl EventHandler for Bot {
         info!("Bot is ready! Logged in as: {}", ready.user.name);
         info!("Bot ID: {}", ready.user.id);
         info!("Connected to {} guilds", ready.guilds.len());
+        
+        // Update Discord timestamp to indicate successful connection
+        self.health.update_discord_timestamp();
 
         info!("Starting command registration...");
 
@@ -283,8 +286,14 @@ impl EventHandler for Bot {
                 }
             };
 
-            if let Err(e) = response {
-                error!("Failed to respond to interaction: {}", e);
+            match response {
+                Ok(_) => {
+                    // Update Discord timestamp on successful interaction response
+                    self.health.update_discord_timestamp();
+                }
+                Err(e) => {
+                    error!("Failed to respond to interaction: {}", e);
+                }
             }
         }
     }
@@ -423,9 +432,10 @@ async fn price_update_loop(
             debug!("Updating nickname to: {}", nickname);
             debug!("Updating custom status to: {}", custom_status);
 
-            // Update custom status (activity)
+            // Update custom status (activity) - this doesn't return a Result
             ctx.set_activity(Some(ActivityData::playing(custom_status.clone())));
             debug!("Updated activity status");
+            health.reset_gateway_failures();
 
             // Save current price to database with error handling
             if let Err(e) = database.save_price(crypto_name, current_price) {
@@ -449,6 +459,19 @@ async fn price_update_loop(
                 let successful_updates = results.iter().filter(|r| r.is_ok()).count();
                 if successful_updates > 0 {
                     health.update_discord_timestamp();
+                } else {
+                    // If no Discord updates succeeded, check if we should exit for restart
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let last_discord = health.last_discord_update.load(std::sync::atomic::Ordering::Relaxed);
+                    
+                    // If Discord communication has been failing for more than 10 minutes, exit for restart
+                    if now.saturating_sub(last_discord) > 600 {
+                        error!("Discord communication has been failing for over 10 minutes. Exiting for restart.");
+                        return Err(BotError::Discord("Gateway connection lost - restarting".into()));
+                    }
                 }
 
                 debug!(

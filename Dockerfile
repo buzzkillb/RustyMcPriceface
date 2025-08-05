@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
