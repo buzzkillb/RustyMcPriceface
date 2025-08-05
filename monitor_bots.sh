@@ -43,6 +43,15 @@ check_and_restart_bot() {
         return
     fi
     
+    # Check for gateway connection errors in recent logs
+    local gateway_errors=$(docker logs --tail 20 "$container_name" 2>/dev/null | grep -c "failed to send ShardRunnerMessage to shard: send failed because receiver is gone")
+    
+    if [ "$gateway_errors" -gt 0 ]; then
+        log "WARNING: $bot_name has gateway connection errors ($gateway_errors recent), restarting container"
+        docker restart "$container_name"
+        return
+    fi
+    
     # Parse JSON to check if Discord updates are recent and check for gateway failures
     local seconds_since_discord=$(echo "$health_response" | jq -r '.seconds_since_discord_update // 999999')
     local consecutive_failures=$(echo "$health_response" | jq -r '.consecutive_failures // 0')
