@@ -87,7 +87,7 @@ impl DatabaseCleanup {
         let conn = self.get_connection()?;
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| BotError::SystemTime(format!("System time error: {}", e)))?
             .as_secs();
         
         let cutoff_time = current_time - older_than_seconds;
@@ -235,7 +235,7 @@ impl DatabaseCleanup {
         let conn = self.get_connection()?;
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| BotError::SystemTime(format!("System time error: {}", e)))?
             .as_secs();
         
         let cutoff_time = current_time - older_than_seconds;
@@ -267,12 +267,12 @@ impl DatabaseCleanup {
 
     /// Delete old aggregated data beyond retention period
     fn cleanup_old_aggregates(&self, bucket_duration_seconds: u64, older_than_seconds: u64) -> BotResult<u64> {
-        info!("   � Clelaning up {}-second aggregates older than {} seconds", bucket_duration_seconds, older_than_seconds);
+        info!("   🧹 Cleaning up {}-second aggregates older than {} seconds", bucket_duration_seconds, older_than_seconds);
         
         let conn = self.get_connection()?;
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| BotError::SystemTime(format!("System time error: {}", e)))?
             .as_secs();
         
         let cutoff_time = current_time - older_than_seconds;

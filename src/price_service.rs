@@ -30,7 +30,10 @@ fn init_database() -> SqliteResult<Connection> {
     // Create shared directory if it doesn't exist
     let shared_dir = "shared";
     if !Path::new(shared_dir).exists() {
-        fs::create_dir(shared_dir).expect("Failed to create shared directory");
+        fs::create_dir(shared_dir).map_err(|e| rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+            Some(format!("Failed to create shared directory: {}", e))
+        ))?;
         println!("📁 Created shared directory");
     }
     
@@ -61,7 +64,10 @@ fn init_database() -> SqliteResult<Connection> {
 fn store_prices_in_db(conn: &Connection, prices: &HashMap<String, PriceData>) -> SqliteResult<()> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .map_err(|e| rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
+            Some(format!("System time error: {}", e))
+        ))?
         .as_secs();
     
     for (crypto_name, price_data) in prices {
@@ -78,7 +84,10 @@ fn cleanup_old_prices(conn: &Connection) -> SqliteResult<()> {
     // Delete prices older than 60 days (60 * 24 * 60 * 60 = 5184000 seconds)
     let sixty_days_ago = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .map_err(|e| rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
+            Some(format!("System time error: {}", e))
+        ))?
         .as_secs() - 5184000;
     
     let deleted = conn.execute(
@@ -205,7 +214,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
     
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .map_err(|e| format!("System time error: {}", e))?
         .as_secs();
     
     // Update timestamps for all prices
@@ -239,7 +248,10 @@ async fn main() {
     // Create shared directory if it doesn't exist
     let shared_dir = "shared";
     if !Path::new(shared_dir).exists() {
-        fs::create_dir(shared_dir).expect("Failed to create shared directory");
+        if let Err(e) = fs::create_dir(shared_dir) {
+            eprintln!("Failed to create shared directory: {}", e);
+            return;
+        }
         println!("📁 Created shared directory");
     }
     

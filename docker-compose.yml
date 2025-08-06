@@ -1,6 +1,8 @@
 services:
   price-service:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - ./shared:/app/shared
     environment:
@@ -36,6 +38,7 @@ services:
       - DISCORD_TOKEN=${DISCORD_TOKEN_SOL}
       - CRYPTO_NAME=SOL
       - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+      - RUST_LOG=info,discord_bot::database=debug
     command: ["./discord-bot"]
     depends_on:
       - price-service

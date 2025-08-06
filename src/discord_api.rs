@@ -30,7 +30,7 @@ impl DiscordApi {
         
         // Enforce rate limiting
         let sleep_time = {
-            let mut last_call = LAST_CALL.lock().unwrap();
+            let mut last_call = LAST_CALL.lock().map_err(|_| serenity::Error::Other("Mutex lock error"))?;
             let now = std::time::Instant::now();
             
             if let Some(last) = *last_call {

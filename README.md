@@ -1,326 +1,440 @@
-# Multi-Crypto Discord Price Bot
+# 🚀 Multi-Crypto Discord Price Bot
 
-A Discord bot that tracks cryptocurrency prices in real-time and displays them as custom status messages and nicknames. The bot supports multiple cryptocurrencies simultaneously and provides slash commands for price queries.
+A high-performance Discord bot system built in Rust that tracks cryptocurrency prices in real-time. Each cryptocurrency gets its own dedicated bot instance with live price updates, Discord status displays, and interactive slash commands.
 
-## Features
+## ✨ Features
 
-- 🚀 **Real-time price tracking** for multiple cryptocurrencies
-- 📊 **Persistent price history** using SQLite database
-- 🎯 **Custom Discord status** with rotating price displays
-- 📈 **Percentage change tracking** (1h, 12h, 24h, 7d)
-- 💱 **Cross-rate conversions** (BTC, ETH, SOL equivalents)
-- ⚡ **Slash commands** for instant price queries
-- 🔄 **Automatic data cleanup** (7-day retention)
-- 🐳 **Docker Compose** for easy deployment
+### 🎯 **Core Functionality**
+- **Real-time Price Tracking**: Updates every 12 seconds from Pyth Network
+- **Multi-Bot Architecture**: Dedicated bot instance per cryptocurrency
+- **Live Discord Integration**: Dynamic nicknames and status messages
+- **Interactive Commands**: Slash commands for instant price queries
+- **Historical Data**: SQLite database with price history and trends
 
-## Supported Cryptocurrencies
+### � **PriceC Display**
+- **Dynamic Nicknames**: Shows current price (e.g., "BTC $67,234")
+- **Rotating Status**: Cycles through percentage changes and cross-rates
+- **Trend Indicators**: Visual arrows (📈📉) for price movements
+- **Multi-Timeframe**: 1h, 12h, 24h, 7d percentage changes
+- **Cross-Rate Conversion**: BTC, ETH, SOL equivalent values
 
-- **BTC** (Bitcoin)
-- **ETH** (Ethereum) 
-- **SOL** (Solana)
-- **WIF** (dogwifhat)
-- **FARTCOIN** (Custom token)
-- *And more...*
+### 🛠️ **Technical Features**
+- **Alpine Linux**: Optimized containers (~115MB each)
+- **Health Monitoring**: Built-in health check endpoints
+- **Auto-Recovery**: Comprehensive error handling and retry logic
+- **Rate Limiting**: Discord API protection with exponential backoff
+- **Data Persistence**: SQLite with automatic cleanup
+- **Resource Efficient**: ~3-6MB RAM per bot instance
 
-## Quick Start
+## 🏗️ **Architecture**
 
-### Prerequisites
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Pyth Network  │───▶│  Price Service   │───▶│ Shared Database │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │ JSON Price Cache│    │   SQLite DB     │
+                       └─────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                    ┌─────────────────────────────────────────────┐
+                    │           Discord Bots                      │
+                    │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐   │
+                    │  │ BTC │ │ ETH │ │ SOL │ │ ... │ │ ... │   │
+                    │  └─────┘ └─────┘ └─────┘ └─────┘ └─────┘   │
+                    └─────────────────────────────────────────────┘
+```
+
+### **Components**
+
+1. **Price Service**: Fetches and aggregates price data from Pyth Network
+2. **Discord Bots**: Individual bot instances for each cryptocurrency
+3. **Shared Database**: SQLite database for price history and calculations
+4. **Health Monitoring**: HTTP endpoints for service health checks
+5. **Database Cleanup**: Automated data retention management
+
+## 🚀 **Quick Start**
+
+### **Prerequisites**
 
 - Docker and Docker Compose
-- Discord Bot Token(s)
-- Pyth Network Feed IDs (for direct API access)
+- Discord Developer Account
+- Basic knowledge of environment variables
 
-### 1. Clone and Setup
+### **1. Clone Repository**
 
 ```bash
-git clone <your-repo-url>
-cd pbot
-cp env.example .env
+git clone <repository-url>
+cd crypto-discord-bot
 ```
 
-### 2. Configure Environment Variables
-
-Edit `.env` file with your Discord bot tokens and settings:
+### **2. Create Environment File**
 
 ```bash
-# Update intervals (in seconds)
+cp .env.example .env
+```
+
+Edit `.env` with your configuration:
+
+```bash
+# Update interval (seconds)
 UPDATE_INTERVAL_SECONDS=12
 
-# Discord Bot Tokens (one per crypto)
-DISCORD_TOKEN_SOL=your_sol_bot_token_here
+# Discord Bot Tokens (create one bot per crypto)
 DISCORD_TOKEN_BTC=your_btc_bot_token_here
 DISCORD_TOKEN_ETH=your_eth_bot_token_here
-DISCORD_TOKEN_WIF=your_wif_bot_token_here
-DISCORD_TOKEN_FARTCOIN=your_fartcoin_bot_token_here
+DISCORD_TOKEN_SOL=your_sol_bot_token_here
+# Add more tokens as needed...
 
-# Pyth Network Feed IDs (optional, for direct API access)
-# Get feed IDs from: https://pyth.network/price-feeds
-CRYPTO_FEEDS=BTC:your_btc_feed_id_here,ETH:your_eth_feed_id_here,SOL:your_sol_feed_id_here,WIF:your_wif_feed_id_here
+# Optional: Pyth Network Feed IDs for direct API access
+CRYPTO_FEEDS=BTC:feed_id_here,ETH:feed_id_here,SOL:feed_id_here
 ```
 
-### 3. Build and Run
+### **3. Build and Deploy**
 
 ```bash
-# Build the release binaries
-cargo build --release
-
-# Build Docker images
-docker-compose build
+# Build optimized containers
+./build.sh
 
 # Start all services
 docker-compose up -d
-```
 
-### 4. Verify Installation
-
-Check that all services are running:
-
-```bash
+# Verify deployment
 docker-compose ps
 ```
 
-You should see:
-- `pbot-price-service-1` - Price aggregation service
-- `pbot-sol-bot-1` - Solana price bot
-- `pbot-btc-bot-1` - Bitcoin price bot
-- `pbot-eth-bot-1` - Ethereum price bot
-- `pbot-wif-bot-1` - WIF price bot
-- `pbot-fartcoin-bot-1` - Fartcoin price bot
+### **4. Check Health**
 
-## Adding New Cryptocurrencies
+```bash
+# Test health endpoints
+curl http://localhost:9081/health | jq .
 
-### Example: Adding WIF (dogwifhat)
+# View logs
+docker-compose logs -f sol-bot
+```
 
-#### 1. Create Discord Bot
+## 🤖 **Discord Bot Setup**
 
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application
-3. Go to "Bot" section and create a bot
-4. Copy the bot token
-5. Enable "Message Content Intent" and "Server Members Intent"
-6. Invite the bot to your server with appropriate permissions
+### **Creating Discord Bots**
 
-#### 2. Update Environment Variables
+For each cryptocurrency, you need a separate Discord bot:
+
+1. **Go to Discord Developer Portal**: https://discord.com/developers/applications
+2. **Create New Application**: Give it a name (e.g., "BTC Price Bot")
+3. **Create Bot**: Go to "Bot" section and create a bot
+4. **Copy Token**: Save the bot token securely
+5. **Enable Intents**: Enable "Server Members Intent" if needed
+6. **Generate Invite**: Create invite link with appropriate permissions
+
+### **Required Permissions**
+
+Your bots need these Discord permissions:
+- `Change Nickname` - To update price in nickname
+- `Use Slash Commands` - For interactive commands
+- `Send Messages` - For command responses
+- `Read Message History` - For command context
+
+### **Invite URL Example**
+
+```
+https://discord.com/api/oauth2/authorize?client_id=YOUR_BOT_ID&permissions=67584&scope=bot%20applications.commands
+```
+
+## 📈 **Supported Cryptocurrencies**
+
+The system currently supports these cryptocurrencies:
+
+| Symbol | Name | Status |
+|--------|------|--------|
+| BTC | Bitcoin | ✅ Active |
+| ETH | Ethereum | ✅ Active |
+| SOL | Solana | ✅ Active |
+| AVAX | Avalanche | ✅ Active |
+| BNB | Binance Coin | ✅ Active |
+| DOGE | Dogecoin | ✅ Active |
+| SUI | Sui | ✅ Active |
+| SEI | Sei | ✅ Active |
+| JLP | Jupiter LP | ✅ Active |
+| PUMP | Pump.fun | ✅ Active |
+| MSTR | MicroStrategy | ✅ Active |
+| HOOD | Robinhood | ✅ Active |
+| SBET | SportsBet | ✅ Active |
+| GOLD | Gold | ✅ Active |
+| SILVER | Silver | ✅ Active |
+
+## ➕ **Adding New Cryptocurrencies**
+
+### **Step 1: Create Discord Bot**
+
+Follow the Discord Bot Setup section to create a new bot for your cryptocurrency.
+
+### **Step 2: Update Environment**
 
 Add the new bot token to your `.env` file:
 
 ```bash
-DISCORD_TOKEN_WIF=your_wif_bot_token_here
+DISCORD_TOKEN_NEWCOIN=your_new_bot_token_here
 ```
 
-#### 3. Add to Docker Compose
+### **Step 3: Add to Docker Compose**
 
 Add a new service to `docker-compose.yml`:
 
 ```yaml
-services:
-  # ... existing services ...
-  
-  wif-bot:
-    build: .
-    volumes:
-      - ./shared:/app/shared
-    environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN_WIF}
-      - CRYPTO_NAME=WIF
-      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
-    command: ["./discord-bot"]
-    depends_on:
-      - price-service
-    restart: unless-stopped
+newcoin-bot:
+  build: .
+  volumes:
+    - ./shared:/app/shared
+  environment:
+    - DISCORD_TOKEN=${DISCORD_TOKEN_NEWCOIN}
+    - CRYPTO_NAME=NEWCOIN
+    - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
+  command: ["./discord-bot"]
+  depends_on:
+    - price-service
+  restart: unless-stopped
+  ports:
+    - "9098:8080"  # Use next available port
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
 ```
 
-#### 4. Update Price Service Feeds
+### **Step 4: Find Pyth Feed ID**
 
-Add the WIF feed ID to the `CRYPTO_FEEDS` environment variable in `docker-compose.yml`:
-
-```yaml
-services:
-  price-service:
-    build: .
-    volumes:
-      - ./shared:/app/shared
-    environment:
-      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
-      - CRYPTO_FEEDS=${CRYPTO_FEEDS:-BTC:your_btc_feed_id_here,ETH:your_eth_feed_id_here,SOL:your_sol_feed_id_here,WIF:your_wif_feed_id_here}
-    command: ["./price-service"]
-    restart: unless-stopped
-```
-
-#### 5. Rebuild and Restart
-
-```bash
-# Rebuild with new configuration
-docker-compose build
-
-# Restart all services
-docker-compose down
-docker-compose up -d
-```
-
-### Finding Pyth Feed IDs
-
-To find the correct feed ID for a cryptocurrency:
-
-1. Visit [Pyth Network Price Feeds](https://pyth.network/price-feeds)
+1. Visit https://pyth.network/price-feeds
 2. Search for your cryptocurrency
-3. Copy the feed ID (the long hexadecimal string)
+3. Copy the feed ID (hexadecimal string)
+4. Add to `CRYPTO_FEEDS` in your environment
 
-## Bot Features
-
-### Discord Status Display
-
-Each bot displays:
-- **Nickname**: Shows current price (e.g., "SOL $95.42")
-- **Custom Status**: Rotates between:
-  - Percentage change over 1 hour
-  - BTC equivalent amount
-  - ETH equivalent amount  
-  - SOL equivalent amount
-
-### Slash Commands
-
-Use `/price [crypto]` to get current price information:
-
-```
-/price SOL
-```
-
-Response example:
-```
-📊 SOL: $95.42 📈 +2.15% (1h) | 📈 +5.23% (12h) | 📉 -1.45% (24h)
-💱 Also: 0.0021 BTC | 0.034 ETH | 1.000 SOL
-```
-
-### Price History
-
-The bot maintains persistent price history in SQLite:
-- **Automatic cleanup**: Removes data older than 7 days
-- **Percentage calculations**: Based on actual historical data
-- **Cross-restart persistence**: History survives bot restarts
-
-## Development
-
-### Local Development
+### **Step 5: Deploy**
 
 ```bash
-# Install Rust dependencies
-cargo build
-
-# Run price service
-cargo run --bin price-service
-
-# Run Discord bot (in another terminal)
-cargo run --bin discord-bot
+# Rebuild and restart
+docker-compose down
+docker-compose up -d --build
 ```
 
-### Database Queries
+## 💬 **Bot Commands**
 
-Query the SQLite database directly:
+### **Slash Commands**
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/price [crypto]` | Get current price info | `/price BTC` |
+
+### **Command Response Format**
+
+```
+📊 BTC: $67,234.56 📈 +2.15% (1h) | 📈 +5.23% (12h) | 📉 -1.45% (24h)
+💱 Cross-rates: 1.000 BTC | 18.45 ETH | 705.2 SOL
+```
+
+### **Status Display Rotation**
+
+Each bot cycles through these status messages:
+1. **1-hour change**: "📈 +2.15% (1h)"
+2. **BTC equivalent**: "≈ 0.0234 BTC"
+3. **ETH equivalent**: "≈ 1.456 ETH"
+4. **SOL equivalent**: "≈ 234.5 SOL"
+
+## 🔧 **Configuration**
+
+### **Environment Variables**
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `UPDATE_INTERVAL_SECONDS` | Price update frequency | `12` | No |
+| `DISCORD_TOKEN_*` | Discord bot tokens | - | Yes |
+| `CRYPTO_FEEDS` | Pyth Network feed IDs | - | No |
+| `CRYPTO_NAME` | Cryptocurrency symbol | - | Yes |
+| `CLEANUP_INTERVAL_HOURS` | Database cleanup frequency | `24` | No |
+
+### **Update Intervals**
+
+Choose based on your needs:
+- **12 seconds**: Real-time updates (default)
+- **30 seconds**: Balanced performance
+- **60 seconds**: Lower resource usage
+- **300 seconds**: Minimal resource usage
+
+### **Health Check Ports**
+
+Each service exposes a health endpoint:
+- Price Service: No external port
+- SOL Bot: `http://localhost:9081/health`
+- BTC Bot: `http://localhost:9082/health`
+- ETH Bot: `http://localhost:9083/health`
+- (Additional bots on ports 9084-9096)
+
+## 📊 **Monitoring & Management**
+
+### **Health Monitoring**
 
 ```bash
-# View latest prices
-cargo run --bin db-query
+# Check all services
+docker-compose ps
 
-# Or use the provided script
-./query-db.sh
+# Test specific health endpoint
+curl http://localhost:9081/health | jq .
+
+# Monitor resource usage
+docker stats --no-stream
 ```
 
-### Logs and Monitoring
+### **Log Management**
 
 ```bash
 # View all logs
 docker-compose logs -f
 
-# View specific service logs
-docker-compose logs -f sol-bot
+# View specific service
+docker-compose logs -f btc-bot
 
-# Check service status
-docker-compose ps
+# View recent logs only
+docker-compose logs --tail=50 price-service
 ```
 
-## Configuration Options
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `UPDATE_INTERVAL_SECONDS` | How often to update prices | `12` |
-| `DISCORD_TOKEN_*` | Discord bot tokens | Required |
-| `CRYPTO_FEEDS` | Pyth Network feed IDs | Optional |
-| `CRYPTO_NAME` | Cryptocurrency symbol | Required |
-
-### Update Intervals
-
-- **12 seconds**: Real-time updates (default)
-- **30 seconds**: Balanced performance
-- **60 seconds**: Lower resource usage
-
-## Troubleshooting
-
-### Common Issues
-
-**Bot not responding to slash commands:**
-- Ensure bot has proper permissions
-- Check that slash commands are registered globally
-- Verify bot token is correct
-
-**No price data:**
-- Check if price-service is running
-- Verify Pyth feed IDs are correct
-- Check network connectivity
-
-**Database errors:**
-- Ensure `shared/` directory exists and is writable
-- Check disk space
-- Verify SQLite permissions
-
-### Debug Commands
+### **Database Management**
 
 ```bash
-# Check container logs
-docker-compose logs [service-name]
-
-# Access container shell
-docker-compose exec [service-name] /bin/bash
-
-# View database contents
+# Query database directly
 docker-compose exec price-service ./db-query
 
-# Restart specific service
-docker-compose restart [service-name]
+# Manual cleanup
+docker-compose exec db-cleanup ./db-cleanup
+
+# Backup database
+cp shared/prices.db backup/prices-$(date +%Y%m%d).db
 ```
 
-## Architecture
+## 🛠️ **Development**
 
-### Components
+### **Local Development**
 
-1. **Price Service** (`price-service`): Aggregates prices from Pyth Network
-2. **Discord Bots** (`*-bot`): Individual bots for each cryptocurrency
-3. **Shared Database** (`shared/prices.db`): SQLite database for price history
-4. **Shared Files** (`shared/prices.json`): JSON cache for current prices
+```bash
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-### Data Flow
+# Build project
+cargo build --release
 
+# Run price service locally
+cargo run --bin price-service
+
+# Run specific bot locally
+CRYPTO_NAME=BTC DISCORD_TOKEN=your_token cargo run --bin discord-bot
 ```
-Pyth Network → Price Service → SQLite DB + JSON Cache → Discord Bots → Discord
+
+### **Testing**
+
+```bash
+# Run tests
+cargo test
+
+# Check code formatting
+cargo fmt --check
+
+# Run linter
+cargo clippy
 ```
 
-## Contributing
+### **Building Containers**
+
+```bash
+# Build all containers
+./build.sh
+
+# Build specific service
+docker-compose build btc-bot
+
+# Check image sizes
+docker images | grep rustymcpriceface
+```
+
+## 🚨 **Troubleshooting**
+
+### **Common Issues**
+
+**Bot not responding to commands:**
+- Verify bot token is correct
+- Check bot permissions in Discord server
+- Ensure slash commands are registered
+- Check bot logs: `docker-compose logs bot-name`
+
+**No price updates:**
+- Check price-service logs: `docker-compose logs price-service`
+- Verify network connectivity
+- Check Pyth Network status
+- Ensure shared directory permissions are correct
+
+**Database errors:**
+- Check disk space: `df -h`
+- Verify shared directory permissions: `ls -la shared/`
+- Check database file: `file shared/prices.db`
+- Review database logs: `docker-compose logs db-cleanup`
+
+**High resource usage:**
+- Monitor with: `docker stats`
+- Check update interval settings
+- Review log levels
+- Consider increasing update intervals
+
+### **Debug Commands**
+
+```bash
+# Access container shell
+docker-compose exec btc-bot /bin/sh
+
+# Check container health
+docker-compose exec btc-bot curl localhost:8080/health
+
+# View database schema
+docker-compose exec price-service sqlite3 shared/prices.db ".schema"
+
+# Check file permissions
+docker-compose exec price-service ls -la shared/
+
+# Test network connectivity
+docker-compose exec price-service ping pyth.network
+```
+
+### **Performance Tuning**
+
+```bash
+# Reduce update frequency
+UPDATE_INTERVAL_SECONDS=30
+
+# Lower log levels
+RUST_LOG=warn
+
+# Optimize database
+docker-compose exec price-service sqlite3 shared/prices.db "VACUUM;"
+```
+
+## 📝 **License**
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🤝 **Contributing**
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## License
+## 📞 **Support**
 
-[Your License Here]
+- **Issues**: Create an issue on GitHub
+- **Documentation**: Check this README and inline code comments
+- **Logs**: Always include relevant logs when reporting issues
+- **Health Checks**: Use health endpoints to diagnose problems
 
-## Support
+---
 
-For issues and questions:
-- Create an issue on GitHub
-- Check the troubleshooting section
-- Review the logs for error messages 
+**Built with ❤️ in Rust** | **Optimized for Alpine Linux** | **Production Ready** 🚀 

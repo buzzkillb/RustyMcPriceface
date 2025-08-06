@@ -65,6 +65,7 @@ impl PriceDatabase {
 
     /// Get price changes for different time periods (works with both raw and aggregated data)
     pub fn get_price_changes(&self, crypto: &str, current_price: f64) -> BotResult<String> {
+        info!("🔍 Getting price changes for {} at ${}", crypto, current_price);
         validate_crypto_name(crypto)?;
         validate_price(current_price)?;
         
@@ -88,26 +89,35 @@ impl PriceDatabase {
             // Try to get price from appropriate data source based on age
             let old_price = if seconds <= 24 * 3600 {
                 // For recent data (< 24h), use raw prices table
+                debug!("Looking for {} {} data in raw table, time_ago: {}", label, crypto, time_ago);
                 self.get_price_from_raw_data(&conn, crypto, time_ago)?
             } else if seconds <= 7 * 24 * 3600 {
                 // For 1-7 days old, use 1-minute aggregates
+                debug!("Looking for {} {} data in 60s aggregates, time_ago: {}", label, crypto, time_ago);
                 self.get_price_from_aggregates(&conn, crypto, time_ago, 60)?
             } else if seconds <= 30 * 24 * 3600 {
                 // For 7-30 days old, use 5-minute aggregates
+                debug!("Looking for {} {} data in 300s aggregates, time_ago: {}", label, crypto, time_ago);
                 self.get_price_from_aggregates(&conn, crypto, time_ago, 300)?
             } else {
                 // For older data, use 15-minute aggregates
+                debug!("Looking for {} {} data in 900s aggregates, time_ago: {}", label, crypto, time_ago);
                 self.get_price_from_aggregates(&conn, crypto, time_ago, 900)?
             };
             
             // Only add the change if we have data for that time period
             if let Some(price) = old_price {
+                debug!("Found {} {} price: ${} (current: ${})", label, crypto, price, current_price);
                 let change_percent = calculate_percentage_change(current_price, price)?;
                 let arrow = get_change_arrow(change_percent);
                 let sign = if change_percent >= 0.0 { "+" } else { "" };
                 changes.push(format!("{} {}{:.2}% ({})", arrow, sign, change_percent, label));
+            } else {
+                debug!("No {} {} price data found for time_ago: {}", label, crypto, time_ago);
             }
         }
+        
+        info!("Found {} price changes for {}: {:?}", changes.len(), crypto, changes);
         
         if changes.is_empty() {
             Ok("🔄 Building history".to_string())
@@ -132,13 +142,17 @@ impl PriceDatabase {
 
     /// Get price from aggregated data table
     fn get_price_from_aggregates(&self, conn: &Connection, crypto: &str, time_ago: u64, bucket_duration: u64) -> BotResult<Option<f64>> {
+        // Find the bucket that contains or is closest to the target time
+        // We want the bucket where bucket_start <= time_ago < bucket_start + bucket_duration
+        // Or the closest bucket if no exact match
         let mut stmt = conn.prepare(
             "SELECT open_price FROM price_aggregates 
-             WHERE crypto_name = ? AND bucket_start <= ? AND bucket_duration = ?
-             ORDER BY bucket_start ASC LIMIT 1"
+             WHERE crypto_name = ? AND bucket_duration = ?
+             AND bucket_start <= ?
+             ORDER BY bucket_start DESC LIMIT 1"
         )?;
         
-        let rows = stmt.query_map([crypto, &time_ago.to_string(), &bucket_duration.to_string()], |row| {
+        let rows = stmt.query_map([crypto, &bucket_duration.to_string(), &time_ago.to_string()], |row| {
             Ok(row.get(0)?)
         })?;
         

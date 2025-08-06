@@ -1,26 +1,49 @@
-FROM debian:bookworm-slim
+# Build stage - compile Rust binaries for musl
+FROM rust:1.82-alpine AS builder
 
-# Install runtime dependencies including OpenSSL and curl for health checks
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    curl \
-    jq \
-    && rm -rf /var/lib/apt/lists/*
+# Install build dependencies
+RUN apk add --no-cache \
+    musl-dev \
+    pkgconfig \
+    openssl-dev \
+    openssl-libs-static
 
 WORKDIR /app
 
-# Copy the built binaries from local build
-COPY target/release/price-service /app/price-service
-COPY target/release/discord-bot /app/discord-bot
-COPY target/release/db-query /app/db-query
-COPY target/release/db-cleanup /app/db-cleanup
+# Copy source code
+COPY Cargo.toml ./
+COPY Cargo.lock* ./
+COPY src/ ./src/
 
-# Make binaries executable
-RUN chmod +x /app/price-service /app/discord-bot /app/db-query /app/db-cleanup
+# Build for musl target (static linking)
+ENV RUSTFLAGS="-C target-feature=+crt-static"
+RUN cargo build --release --target x86_64-unknown-linux-musl
 
-# Create shared directory for price data
-RUN mkdir -p /app/shared
+# Runtime stage - minimal Alpine image
+FROM alpine:3.19
 
-# Default command (can be overridden)
-CMD ["/app/price-service"] 
+# Install only runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    jq \
+    && addgroup -g 1000 appuser \
+    && adduser -D -s /bin/sh -u 1000 -G appuser appuser
+
+WORKDIR /app
+
+# Copy binaries from builder stage
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/price-service ./price-service
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/discord-bot ./discord-bot
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/db-query ./db-query
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/db-cleanup ./db-cleanup
+
+# Create shared directory and set permissions
+RUN mkdir -p /app/shared \
+    && chown -R appuser:appuser /app
+
+# Switch to non-root user for security
+USER appuser
+
+# Default command
+CMD ["./price-service"] 

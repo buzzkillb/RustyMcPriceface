@@ -1,0 +1,37 @@
+# Build artifacts
+target/
+Cargo.lock
+
+# Documentation
+*.md
+docs/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+
+# Shared data (will be mounted as volume)
+shared/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+
+# Scripts
+*.sh
+
+# Temporary files
+*.tmp
+*.swp
+*~

@@ -23,7 +23,7 @@ const RECONNECT_DELAY_SECONDS: u64 = 30;
 async fn main() -> BotResult<()> {
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter("info,discord_bot=debug")
+        .with_env_filter("info,discord_bot=debug,discord_bot::database=debug")
         .init();
     
     info!("Starting bot with slash command support...");

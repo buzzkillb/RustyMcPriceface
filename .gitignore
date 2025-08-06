@@ -30,8 +30,29 @@ logs/
 Thumbs.db
 
 # Docker
-.dockerignore
+# .dockerignore - keeping this in repo as it's useful
 
 # Temporary files
 *.tmp
 *.temp
+
+# Documentation files (internal/sensitive)
+ALPINE_MIGRATION.md
+DEPLOYMENT_SUCCESS.md
+FIXES_SUMMARY.md
+REFACTORING_SUMMARY.md
+DATABASE_AGGREGATION_SUMMARY.md
+TROUBLESHOOTING.md
+
+# Build and monitoring scripts (internal)
+build.sh
+monitor_bots.sh
+restart_bots.sh
+restart_bot.sh
+setup_monitoring.sh
+test_setup.sh
+bot_status.sh
+query-db.sh
+fix_cargo_lock.sh
+get-docker.sh
+bot_monitor.log

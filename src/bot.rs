@@ -16,7 +16,7 @@ use serenity::{
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
     http::Http,
-    model::{application::CommandInteraction, gateway::Ready},
+    model::{application::CommandInteraction, gateway::Ready, channel::Message},
     prelude::*,
     Client,
 };
@@ -124,10 +124,15 @@ impl Bot {
         info!("{} price: ${}", crypto_name, price_data.price);
 
         // Calculate price changes over different time periods using database
+        info!("About to call get_price_changes for {} at ${}", crypto_name, price_data.price);
         let change_info = self
             .database
             .get_price_changes(&crypto_name, price_data.price)
-            .unwrap_or_else(|_| " 🔄 Building history".to_string());
+            .unwrap_or_else(|e| {
+                error!("Failed to get price changes for {}: {}", crypto_name, e);
+                " 🔄 Building history".to_string()
+            });
+        info!("get_price_changes returned: {}", change_info);
 
         // Build the main response
         let mut response = format!(
@@ -180,6 +185,99 @@ impl Bot {
         }
 
         Ok(response)
+    }
+
+    /// Handle price command for message-based commands (like !btc, !sol)
+    async fn handle_price_command_for_message(&self, channel_id: &serenity::model::id::ChannelId, ctx: &Context) -> BotResult<()> {
+        // Use the same logic as the slash command but send to channel
+        let crypto_name = &self.config.crypto_name;
+
+        debug!("Message price command called for: {}", crypto_name);
+
+        // Get current price from shared prices file
+        let prices = read_prices_from_file().await?;
+        debug!(
+            "Available cryptos: {:?}",
+            prices.prices.keys().collect::<Vec<_>>()
+        );
+
+        let price_data = prices
+            .prices
+            .get(crypto_name)
+            .ok_or_else(|| BotError::PriceNotFound(crypto_name.clone()))?;
+
+        validate_price(price_data.price)?;
+
+        let formatted_price = format_price(price_data.price);
+
+        info!("{} price: ${}", crypto_name, price_data.price);
+
+        // Calculate price changes over different time periods using database
+        info!("About to call get_price_changes for {} at ${}", crypto_name, price_data.price);
+        let change_info = self
+            .database
+            .get_price_changes(crypto_name, price_data.price)
+            .unwrap_or_else(|e| {
+                error!("Failed to get price changes for {}: {}", crypto_name, e);
+                " 🔄 Building history".to_string()
+            });
+        info!("get_price_changes returned: {}", change_info);
+
+        // Build the main response
+        let mut response = format!(
+            "{}: {} {}",
+            crypto_name, formatted_price, change_info
+        );
+
+        // Add prices in terms of BTC, ETH, and SOL (excluding the crypto's own price)
+        let mut conversion_prices = Vec::new();
+
+        if crypto_name != "BTC" {
+            if let Some(btc_price) = prices.prices.get("BTC") {
+                let btc_conversion = price_data.price / btc_price.price;
+                conversion_prices.push(format!("{:.8} BTC", btc_conversion));
+                debug!("BTC conversion: {:.8} BTC", btc_conversion);
+            } else {
+                warn!("BTC price not found in shared data");
+            }
+        }
+
+        if crypto_name != "ETH" {
+            if let Some(eth_price) = prices.prices.get("ETH") {
+                let eth_conversion = price_data.price / eth_price.price;
+                conversion_prices.push(format!("{:.6} ETH", eth_conversion));
+                debug!("ETH conversion: {:.6} ETH", eth_conversion);
+            } else {
+                warn!("ETH price not found in shared data");
+            }
+        }
+
+        if crypto_name != "SOL" {
+            if let Some(sol_price) = prices.prices.get("SOL") {
+                let sol_conversion = price_data.price / sol_price.price;
+                conversion_prices.push(format!("{:.4} SOL", sol_conversion));
+                debug!("SOL conversion: {:.4} SOL", sol_conversion);
+            } else {
+                warn!("SOL price not found in shared data");
+            }
+        }
+
+        // Add conversion prices to response if available
+        if !conversion_prices.is_empty() {
+            response.push_str(&format!(
+                "\n💱 Also: {}",
+                conversion_prices.join(" | ")
+            ));
+            debug!("Final response with conversions: {}", response);
+        } else {
+            warn!("No conversion prices available");
+        }
+
+        // Send the response to the channel
+        channel_id.say(&ctx.http, response).await
+            .map_err(|e| BotError::Discord(format!("Failed to send message: {}", e)))?;
+
+        Ok(())
     }
 
     /// Start the price update loop
@@ -295,6 +393,46 @@ impl EventHandler for Bot {
                     error!("Failed to respond to interaction: {}", e);
                 }
             }
+        }
+    }
+
+    async fn message(&self, ctx: Context, msg: Message) {
+        info!("🔔 MESSAGE RECEIVED: '{}' from {} in channel {}", msg.content, msg.author.name, msg.channel_id);
+        debug!("Received message: '{}' from {}", msg.content, msg.author.name);
+        
+        // Ignore messages from bots
+        if msg.author.bot {
+            debug!("Ignoring message from bot: {}", msg.author.name);
+            return;
+        }
+
+        // Check if message starts with ! followed by this bot's crypto name OR if bot is mentioned
+        let command = format!("!{}", self.config.crypto_name.to_lowercase());
+        let is_command = msg.content.to_lowercase().starts_with(&command);
+        let is_mentioned = msg.mentions_me(&ctx).await.unwrap_or(false);
+        
+        debug!("Looking for command: '{}' in message: '{}', is_command: {}, is_mentioned: {}", 
+               command, msg.content, is_command, is_mentioned);
+        
+        if is_command || is_mentioned {
+            debug!("Received {} command from {}", command, msg.author.name);
+
+            // Get the same price data as the slash command
+            match self.handle_price_command_for_message(&msg.channel_id, &ctx).await {
+                Ok(_) => {
+                    debug!("Successfully responded to {} command", command);
+                    self.health.update_discord_timestamp();
+                }
+                Err(e) => {
+                    error!("Failed to handle {} command: {}", command, e);
+                    // Try to send an error message
+                    if let Err(send_err) = msg.channel_id.say(&ctx.http, format!("❌ Error: {}", e)).await {
+                        error!("Failed to send error message: {}", send_err);
+                    }
+                }
+            }
+        } else {
+            debug!("Message '{}' does not match command '{}'", msg.content, command);
         }
     }
 }
@@ -736,7 +874,7 @@ async fn get_individual_crypto_price(feed_id: &str) -> BotResult<f64> {
 
 /// Start the bot with proper error handling and reconnection capability
 pub async fn start_bot_with_reconnection(config: &BotConfig) -> BotResult<()> {
-    let intents = GatewayIntents::GUILDS;
+    let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
     let bot = Bot::new(config.clone());
 

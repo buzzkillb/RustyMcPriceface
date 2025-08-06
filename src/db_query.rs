@@ -208,7 +208,10 @@ fn cleanup_old_prices(conn: &Connection) -> SqliteResult<()> {
     // Delete prices older than 30 days (30 * 24 * 60 * 60 = 2592000 seconds)
     let thirty_days_ago = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .map_err(|e| rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
+            Some(format!("System time error: {}", e))
+        ))?
         .as_secs() - 2592000;
     
     let deleted = conn.execute(
