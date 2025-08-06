@@ -44,8 +44,7 @@ REFACTORING_SUMMARY.md
 DATABASE_AGGREGATION_SUMMARY.md
 TROUBLESHOOTING.md
 
-# Build and monitoring scripts (internal)
-build.sh
+# Monitoring scripts (internal)
 monitor_bots.sh
 restart_bots.sh
 restart_bot.sh
