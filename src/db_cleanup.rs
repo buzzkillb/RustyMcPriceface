@@ -1,11 +1,6 @@
-mod errors;
-mod config;
-mod health;
-mod health_server;
-
-use errors::{BotError, BotResult};
-use config::{RAW_DATA_RETENTION_HOURS, MINUTE_DATA_RETENTION_DAYS, FIVE_MINUTE_DATA_RETENTION_DAYS, FIFTEEN_MINUTE_DATA_RETENTION_DAYS};
-use health::HealthState;
+use crate::errors::{BotError, BotResult};
+use crate::config::{RAW_DATA_RETENTION_HOURS, MINUTE_DATA_RETENTION_DAYS, FIVE_MINUTE_DATA_RETENTION_DAYS, FIFTEEN_MINUTE_DATA_RETENTION_DAYS};
+use crate::health::HealthState;
 
 use rusqlite::Connection;
 use std::sync::Arc;
@@ -316,14 +311,14 @@ impl DatabaseCleanup {
         let conn = self.get_connection()?;
         
         // Count raw price records
-        let raw_count: i64 = conn.query_row("SELECT COUNT(*) FROM prices", [], |row| row.get(0))?;
+        let raw_count: i64 = conn.query_row("SELECT COUNT(*) FROM prices", [], |row: &rusqlite::Row| row.get(0))?;
         
         // Count aggregated records by bucket size
         let mut stmt = conn.prepare(
             "SELECT bucket_duration, COUNT(*) FROM price_aggregates GROUP BY bucket_duration ORDER BY bucket_duration"
         )?;
         
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([], |row: &rusqlite::Row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })?;
 
@@ -359,6 +354,141 @@ impl DatabaseCleanup {
         unreachable!()
     }
 
+    /// Aggregate data from smaller buckets into larger buckets (e.g., 1m -> 5m)
+    fn aggregate_buckets(&self, source_duration: u64, target_duration: u64, older_than_seconds: u64) -> BotResult<u64> {
+        info!("   🔍 Aggregating {}-second buckets older than {} seconds into {}-second buckets", source_duration, older_than_seconds, target_duration);
+        
+        let conn = self.get_connection()?;
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| BotError::SystemTime(format!("System time error: {}", e)))?
+            .as_secs();
+        
+        let cutoff_time = current_time - older_than_seconds;
+        
+        // Process in batches
+        let batch_size = 100;
+        let mut total_aggregated = 0u64;
+        let mut batch_number = 0;
+        
+        loop {
+            batch_number += 1;
+            
+            // Get a batch of source buckets to aggregate
+            // We group by the NEW bucket start time
+            let mut stmt = conn.prepare(
+                "SELECT crypto_name, 
+                        (bucket_start / ?) * ? as new_bucket_start,
+                        MIN(low_price) as low_price,
+                        MAX(high_price) as high_price,
+                        SUM(avg_price * sample_count) / SUM(sample_count) as avg_price,
+                        SUM(sample_count) as sample_count
+                 FROM price_aggregates 
+                 WHERE bucket_duration = ? 
+                 AND bucket_start < ? 
+                 AND NOT EXISTS (
+                     SELECT 1 FROM price_aggregates pa 
+                     WHERE pa.crypto_name = price_aggregates.crypto_name 
+                     AND pa.bucket_start = (price_aggregates.bucket_start / ?) * ?
+                     AND pa.bucket_duration = ?
+                 )
+                 GROUP BY crypto_name, new_bucket_start
+                 HAVING COUNT(*) > 0
+                 ORDER BY crypto_name, new_bucket_start
+                 LIMIT ?"
+            )?;
+
+            let rows = stmt.query_map([
+                target_duration, target_duration, // new_bucket_start calculation
+                source_duration, // WHERE bucket_duration = source
+                cutoff_time, // AND bucket_start < cutoff
+                target_duration, target_duration, target_duration, // NOT EXISTS check
+                batch_size as u64 // LIMIT
+            ], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,      // crypto_name
+                    row.get::<_, i64>(1)?,         // new_bucket_start
+                    row.get::<_, f64>(2)?,         // low_price
+                    row.get::<_, f64>(3)?,         // high_price
+                    row.get::<_, f64>(4)?,         // avg_price
+                    row.get::<_, i64>(5)?,         // sample_count
+                ))
+            })?;
+
+            let batch_data: Vec<_> = rows.collect::<Result<Vec<_>, _>>()?;
+            
+            if batch_data.is_empty() {
+                break; // No more data to process
+            }
+            
+            debug!("   📊 Found {} bucket groups to aggregate in batch {}", batch_data.len(), batch_number);
+            
+            // Process this batch in a transaction
+            let tx = conn.unchecked_transaction()?;
+            let mut batch_count = 0u64;
+            
+            for (crypto_name, bucket_start, low_price, high_price, avg_price, sample_count) in batch_data {
+                // For open/close, we need to query the source buckets
+                // Open price = Open price of the earliest source bucket in this range
+                // Close price = Close price of the latest source bucket in this range
+                let bucket_end = bucket_start + target_duration as i64;
+                
+                // Get open price
+                let open_price: f64 = tx.query_row(
+                    "SELECT open_price FROM price_aggregates 
+                     WHERE crypto_name = ? AND bucket_duration = ? 
+                     AND bucket_start >= ? AND bucket_start < ? 
+                     ORDER BY bucket_start ASC LIMIT 1",
+                    [&crypto_name, &source_duration.to_string(), &bucket_start.to_string(), &bucket_end.to_string()],
+                    |row| row.get(0)
+                ).unwrap_or(avg_price); // Fallback to avg if query fails (shouldn't happen)
+
+                // Get close price
+                let close_price: f64 = tx.query_row(
+                    "SELECT close_price FROM price_aggregates 
+                     WHERE crypto_name = ? AND bucket_duration = ? 
+                     AND bucket_start >= ? AND bucket_start < ? 
+                     ORDER BY bucket_start DESC LIMIT 1",
+                    [&crypto_name, &source_duration.to_string(), &bucket_start.to_string(), &bucket_end.to_string()],
+                    |row| row.get(0)
+                ).unwrap_or(avg_price);
+
+                // Insert the aggregated data
+                tx.execute(
+                    "INSERT INTO price_aggregates 
+                     (crypto_name, bucket_start, bucket_duration, open_price, high_price, low_price, close_price, avg_price, sample_count)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        &crypto_name,
+                        &bucket_start.to_string(),
+                        &target_duration.to_string(),
+                        &open_price.to_string(),
+                        &high_price.to_string(),
+                        &low_price.to_string(),
+                        &close_price.to_string(),
+                        &avg_price.to_string(),
+                        &sample_count.to_string(),
+                    ]
+                )?;
+                
+                batch_count += 1;
+            }
+            
+            // Commit this batch
+            tx.commit()?;
+            total_aggregated += batch_count;
+            
+            // Small delay
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        if total_aggregated > 0 {
+            info!("📊 Aggregated {} buckets of {}-second data (sourced from {}-second buckets)", total_aggregated, target_duration, source_duration);
+        }
+
+        Ok(total_aggregated)
+    }
+
     /// Single cleanup attempt
     async fn perform_cleanup_attempt(&self) -> BotResult<()> {
         info!("🧹 Starting database cleanup cycle...");
@@ -374,11 +504,13 @@ impl DatabaseCleanup {
         
         // Tier 2: Aggregate 1-minute data older than 7 days into 5-minute buckets  
         info!("📊 Step 3/7: Aggregating 1-minute data into 5-minute buckets...");
-        let aggregated_5m = self.aggregate_data(300, MINUTE_DATA_RETENTION_DAYS * 24 * 3600)?;
+        // CHANGED: Source from 60s buckets instead of raw data
+        let aggregated_5m = self.aggregate_buckets(60, 300, MINUTE_DATA_RETENTION_DAYS * 24 * 3600)?;
         
         // Tier 3: Aggregate 5-minute data older than 30 days into 15-minute buckets
         info!("📊 Step 4/7: Aggregating 5-minute data into 15-minute buckets...");
-        let aggregated_15m = self.aggregate_data(900, FIVE_MINUTE_DATA_RETENTION_DAYS * 24 * 3600)?;
+        // CHANGED: Source from 300s buckets instead of raw data
+        let aggregated_15m = self.aggregate_buckets(300, 900, FIVE_MINUTE_DATA_RETENTION_DAYS * 24 * 3600)?;
         
         // Clean up raw data that has been aggregated (older than 24 hours)
         info!("🗑️ Step 5/7: Cleaning up old raw data (older than 24 hours)...");
@@ -413,14 +545,6 @@ impl DatabaseCleanup {
         Ok(())
     }
 
-    /// Start the health server
-    pub async fn start_health_server(&self) {
-        let health_clone = self.health.clone();
-        tokio::spawn(async move {
-            health_server::start_health_server(health_clone, 8080).await;
-        });
-    }
-
     /// Run the cleanup service with periodic execution
     pub async fn run(&self) -> BotResult<()> {
         let interval_hours = std::env::var("CLEANUP_INTERVAL_HOURS")
@@ -433,8 +557,7 @@ impl DatabaseCleanup {
         info!("🚀 Database cleanup service started");
         info!("⏰ Cleanup interval: {} hours", interval_hours);
         
-        // Start health server
-        self.start_health_server().await;
+        // Note: Health server is now started by main.rs with aggregated health from all bots
         
         // Run initial cleanup after a short delay
         sleep(Duration::from_secs(30)).await;
@@ -455,17 +578,4 @@ impl DatabaseCleanup {
             sleep(interval).await;
         }
     }
-}
-
-#[tokio::main]
-async fn main() -> BotResult<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter("info,db_cleanup=debug")
-        .init();
-    
-    info!("🧹 Starting Database Cleanup Service...");
-    
-    let cleanup_service = DatabaseCleanup::new();
-    cleanup_service.run().await
 }

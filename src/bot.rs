@@ -3,15 +3,17 @@ use crate::database::PriceDatabase;
 use crate::discord_api::DiscordApi;
 use crate::errors::{BotError, BotResult};
 use crate::health::HealthState;
-use crate::health_server;
+
 use crate::price_service::PricesFile;
 use crate::utils::{
     format_price, get_current_timestamp, validate_crypto_name, validate_price,
 };
+use crate::charting::{generate_shanghai_chart, generate_price_chart};
+use crate::price_service::fetch_shanghai_history;
 use serenity::{
     all::{
         ActivityData, Command, CommandDataOptionValue, CommandOptionType, CreateCommand,
-        CreateCommandOption, GatewayIntents,
+        CreateCommandOption, GatewayIntents, CreateAttachment,
     },
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
@@ -20,6 +22,7 @@ use serenity::{
     prelude::*,
     Client,
 };
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,24 +33,21 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 const RECONNECT_DELAY_SECONDS: u64 = 30;
 
 /// Discord bot for tracking cryptocurrency prices
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Bot {
     config: BotConfig,
-    health: HealthState,
+    health: Arc<HealthState>,
     database: Arc<PriceDatabase>,
 }
 
 impl Bot {
-    /// Create a new bot instance with configuration
-    pub fn new(config: BotConfig) -> Self {
-        let health = HealthState::new(config.crypto_name.clone());
-        let database = Arc::new(PriceDatabase::new("shared/prices.db"));
-        
-        Self {
+    /// Create a new bot instance with configuration, shared database, and health state
+    pub fn new(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>) -> BotResult<Self> {
+        Ok(Self {
             config,
             health,
             database,
-        }
+        })
     }
 
     /// Register slash commands with Discord
@@ -69,11 +69,18 @@ impl Bot {
                 .required(false),
             );
 
+        let chart_command = CreateCommand::new("silverchart")
+            .description("Get a 1-year historical chart for the current crypto");
+
         info!("Creating global command...");
 
         Command::create_global_command(http, price_command)
             .await
             .map_err(|e| BotError::Discord(format!("Failed to register /price command: {}", e)))?;
+
+        Command::create_global_command(http, chart_command)
+            .await
+            .map_err(|e| BotError::Discord(format!("Failed to register /silverchart command: {}", e)))?;
 
         info!("Successfully registered /price command globally");
         info!("Note: Global commands can take up to 1 hour to appear in Discord");
@@ -105,34 +112,133 @@ impl Bot {
 
         debug!("Price command called for: {}", crypto_name);
 
-        // Get current price from shared prices file
-        let prices = read_prices_from_file().await?;
-        debug!(
-            "Available cryptos: {:?}",
-            prices.prices.keys().collect::<Vec<_>>()
-        );
+        // Get current price from database
+        let current_price = self.database.get_latest_price(&crypto_name)?;
+        validate_price(current_price)?;
 
-        let price_data = prices
-            .prices
-            .get(&crypto_name)
-            .ok_or_else(|| BotError::PriceNotFound(crypto_name.clone()))?;
+        // Get all prices from database for conversions
+        let all_prices = self.database.get_all_latest_prices()?;
 
-        validate_price(price_data.price)?;
+        // Build response using helper
+        let response = self.build_price_response(&crypto_name, current_price, &all_prices)?;
 
-        let formatted_price = format_price(price_data.price);
+        Ok(response)
+    }
 
-        info!("{} price: ${}", crypto_name, price_data.price);
+    async fn handle_chart_command(&self, interaction: &CommandInteraction, ctx: &Context) -> BotResult<()> {
+        // Defer response as charting might take a moment
+        interaction.defer(&ctx.http).await
+            .map_err(|e| BotError::Discord(format!("Failed to defer interaction: {}", e)))?;
+
+        // silverchart command always uses SILVER
+        let crypto_name = "SILVER";
+        
+        // SILVER uses database history, GOLD uses Shanghai API
+        if crypto_name == "SILVER" || crypto_name == "XAG" {
+            let history = self.database.get_price_history(crypto_name, 30)
+                .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
+
+            if history.is_empty() {
+                interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new().content("❌ No historical data available yet (waiting for data to be collected)")).await
+                    .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
+                return Ok(());
+            }
+
+            let image_data = generate_price_chart(&history, crypto_name).map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
+            let attachment = CreateAttachment::bytes(image_data, "chart.png");
+            interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new()
+                .content(format!("📊 30-Day Chart for {}", crypto_name))
+                .new_attachment(attachment)
+            ).await
+            .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
+            return Ok(());
+        }
+
+        // GOLD still uses Shanghai API
+        let api_symbol = match crypto_name {
+            "GOLD" | "XAU" => Some("XAU"),
+            _ => None,
+        };
+
+        let history = fetch_shanghai_history("1Y", api_symbol).await
+            .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
+
+        if history.is_empty() {
+             interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new().content("❌ No historical data available")).await
+                .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
+             return Ok(());
+        }
+
+        // Generate Chart
+        let image_data = generate_shanghai_chart(&history, crypto_name).map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
+
+        // Send Response
+        let attachment = CreateAttachment::bytes(image_data, "chart.png");
+        interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new()
+            .content(format!("📊 1-Year Chart for {}", crypto_name))
+            .new_attachment(attachment)
+        ).await
+        .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn send_chart_to_channel(
+        &self,
+        ctx: &Context,
+        channel_id: &serenity::model::id::ChannelId,
+        crypto_name: &str,
+        title: &str,
+    ) -> BotResult<()> {
+        match self.database.get_price_history(crypto_name, 30) {
+            Ok(history) => {
+                if history.is_empty() {
+                    let _ = channel_id.say(&ctx.http, "❌ No historical data available yet (waiting for data to be collected)").await;
+                    return Ok(());
+                }
+                match generate_price_chart(&history, crypto_name) {
+                    Ok(image_data) => {
+                        let attachment = CreateAttachment::bytes(image_data, "chart.png");
+                        let _ = channel_id.send_message(&ctx.http, serenity::builder::CreateMessage::new()
+                            .content(title)
+                            .add_file(attachment)
+                        ).await;
+                        self.health.update_discord_timestamp();
+                    },
+                    Err(e) => {
+                        error!("Failed to generate chart: {}", e);
+                        let _ = channel_id.say(&ctx.http, format!("❌ Failed to generate chart: {}", e)).await;
+                    }
+                }
+            },
+            Err(e) => {
+                error!("Failed to fetch history: {}", e);
+                let _ = channel_id.say(&ctx.http, format!("❌ Failed to fetch history: {}", e)).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Build a price response string with conversions and additional info
+    /// This is the core logic shared between slash commands and message commands
+    fn build_price_response(
+        &self,
+        crypto_name: &str,
+        current_price: f64,
+        all_prices: &HashMap<String, f64>,
+    ) -> BotResult<String> {
+        let formatted_price = format_price(current_price);
+
+        info!("{} price: ${}", crypto_name, current_price);
 
         // Calculate price changes over different time periods using database
-        info!("About to call get_price_changes for {} at ${}", crypto_name, price_data.price);
         let change_info = self
             .database
-            .get_price_changes(&crypto_name, price_data.price)
+            .get_price_changes(crypto_name, current_price)
             .unwrap_or_else(|e| {
                 error!("Failed to get price changes for {}: {}", crypto_name, e);
                 " 🔄 Building history".to_string()
             });
-        info!("get_price_changes returned: {}", change_info);
 
         // Build the main response
         let mut response = format!(
@@ -144,33 +250,57 @@ impl Bot {
         let mut conversion_prices = Vec::new();
 
         if crypto_name != "BTC" {
-            if let Some(btc_price) = prices.prices.get("BTC") {
-                let btc_conversion = price_data.price / btc_price.price;
+            if let Some(btc_price) = all_prices.get("BTC") {
+                let btc_conversion = current_price / btc_price;
                 conversion_prices.push(format!("{:.8} BTC", btc_conversion));
-                debug!("BTC conversion: {:.8} BTC", btc_conversion);
-            } else {
-                warn!("BTC price not found in shared data");
             }
         }
 
         if crypto_name != "ETH" {
-            if let Some(eth_price) = prices.prices.get("ETH") {
-                let eth_conversion = price_data.price / eth_price.price;
+            if let Some(eth_price) = all_prices.get("ETH") {
+                let eth_conversion = current_price / eth_price;
                 conversion_prices.push(format!("{:.6} ETH", eth_conversion));
-                debug!("ETH conversion: {:.6} ETH", eth_conversion);
-            } else {
-                warn!("ETH price not found in shared data");
             }
         }
 
         if crypto_name != "SOL" {
-            if let Some(sol_price) = prices.prices.get("SOL") {
-                let sol_conversion = price_data.price / sol_price.price;
+            if let Some(sol_price) = all_prices.get("SOL") {
+                let sol_conversion = current_price / sol_price;
                 conversion_prices.push(format!("{:.4} SOL", sol_conversion));
-                debug!("SOL conversion: {:.4} SOL", sol_conversion);
-            } else {
-                warn!("SOL price not found in shared data");
             }
+        }
+
+        // Add Gold/Silver ratio if this is Silver
+        if crypto_name == "SILVER" || crypto_name == "XAG" {
+            let gold_price = all_prices.get("GOLD")
+                .or_else(|| all_prices.get("XAU"))
+                .or_else(|| all_prices.get("PAXG"));
+
+            if let Some(gold) = gold_price {
+                let ratio = gold / current_price;
+                conversion_prices.push(format!("Ratio: {:.2} (Au/Ag)", ratio));
+            }
+        }
+
+        // Add Shanghai Premium info
+        if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
+            // For SHANGHAISILVER, calculate premium from SILVER price
+            let (premium, premium_percent) = if crypto_name == "SHANGHAISILVER" {
+                if let Some(silver_price) = all_prices.get("SILVER") {
+                    let prem = current_price - silver_price;
+                    let prem_pct = (prem / silver_price) * 100.0;
+                    (prem, prem_pct)
+                } else {
+                    (0.0, 0.0)
+                }
+            } else {
+                (0.0, 0.0) // For SHANGHAI, we'd need premium data from elsewhere
+            };
+            
+            response.push_str(&format!(
+                 "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
+                 premium, premium_percent
+            ));
         }
 
         // Add conversion prices to response if available
@@ -179,9 +309,6 @@ impl Bot {
                 "\n💱 Also: {}",
                 conversion_prices.join(" | ")
             ));
-            debug!("Final response with conversions: {}", response);
-        } else {
-            warn!("No conversion prices available");
         }
 
         Ok(response)
@@ -189,89 +316,19 @@ impl Bot {
 
     /// Handle price command for message-based commands (like !btc, !sol)
     async fn handle_price_command_for_message(&self, channel_id: &serenity::model::id::ChannelId, ctx: &Context) -> BotResult<()> {
-        // Use the same logic as the slash command but send to channel
-        let crypto_name = &self.config.crypto_name;
+        let crypto_name = self.config.crypto_name.clone();
 
         debug!("Message price command called for: {}", crypto_name);
 
-        // Get current price from shared prices file
-        let prices = read_prices_from_file().await?;
-        debug!(
-            "Available cryptos: {:?}",
-            prices.prices.keys().collect::<Vec<_>>()
-        );
+        // Get current price from database
+        let current_price = self.database.get_latest_price(&crypto_name)?;
+        validate_price(current_price)?;
 
-        let price_data = prices
-            .prices
-            .get(crypto_name)
-            .ok_or_else(|| BotError::PriceNotFound(crypto_name.clone()))?;
+        // Get all prices from database for conversions
+        let all_prices = self.database.get_all_latest_prices()?;
 
-        validate_price(price_data.price)?;
-
-        let formatted_price = format_price(price_data.price);
-
-        info!("{} price: ${}", crypto_name, price_data.price);
-
-        // Calculate price changes over different time periods using database
-        info!("About to call get_price_changes for {} at ${}", crypto_name, price_data.price);
-        let change_info = self
-            .database
-            .get_price_changes(crypto_name, price_data.price)
-            .unwrap_or_else(|e| {
-                error!("Failed to get price changes for {}: {}", crypto_name, e);
-                " 🔄 Building history".to_string()
-            });
-        info!("get_price_changes returned: {}", change_info);
-
-        // Build the main response
-        let mut response = format!(
-            "{}: {} {}",
-            crypto_name, formatted_price, change_info
-        );
-
-        // Add prices in terms of BTC, ETH, and SOL (excluding the crypto's own price)
-        let mut conversion_prices = Vec::new();
-
-        if crypto_name != "BTC" {
-            if let Some(btc_price) = prices.prices.get("BTC") {
-                let btc_conversion = price_data.price / btc_price.price;
-                conversion_prices.push(format!("{:.8} BTC", btc_conversion));
-                debug!("BTC conversion: {:.8} BTC", btc_conversion);
-            } else {
-                warn!("BTC price not found in shared data");
-            }
-        }
-
-        if crypto_name != "ETH" {
-            if let Some(eth_price) = prices.prices.get("ETH") {
-                let eth_conversion = price_data.price / eth_price.price;
-                conversion_prices.push(format!("{:.6} ETH", eth_conversion));
-                debug!("ETH conversion: {:.6} ETH", eth_conversion);
-            } else {
-                warn!("ETH price not found in shared data");
-            }
-        }
-
-        if crypto_name != "SOL" {
-            if let Some(sol_price) = prices.prices.get("SOL") {
-                let sol_conversion = price_data.price / sol_price.price;
-                conversion_prices.push(format!("{:.4} SOL", sol_conversion));
-                debug!("SOL conversion: {:.4} SOL", sol_conversion);
-            } else {
-                warn!("SOL price not found in shared data");
-            }
-        }
-
-        // Add conversion prices to response if available
-        if !conversion_prices.is_empty() {
-            response.push_str(&format!(
-                "\n💱 Also: {}",
-                conversion_prices.join(" | ")
-            ));
-            debug!("Final response with conversions: {}", response);
-        } else {
-            warn!("No conversion prices available");
-        }
+        // Build response using helper
+        let response = self.build_price_response(&crypto_name, current_price, &all_prices)?;
 
         // Send the response to the channel
         channel_id.say(&ctx.http, response).await
@@ -279,23 +336,25 @@ impl Bot {
 
         Ok(())
     }
+}
 
-    /// Start the price update loop
-    pub async fn start_price_loop(&self, http: Arc<Http>, ctx: Arc<Context>) {
-        let config = self.config.clone();
-        let health = Arc::new(self.health.clone());
-        let database = self.database.clone();
+/// Helper to start a bot instance (used by main.rs)
+pub async fn start_bot(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>) -> BotResult<()> {
+    let token = config.discord_token.clone();
+    let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
-        // Start health check server
-        let health_clone = health.clone();
-        tokio::spawn(async move {
-            health_server::start_health_server(health_clone, 8080).await;
-        });
+    let bot = Bot::new(config, database, health)?;
 
-        tokio::spawn(async move {
-            price_update_loop(http, ctx, config, health, database).await;
-        });
+    let mut client = Client::builder(&token, intents)
+        .event_handler(bot)
+        .await
+        .map_err(|e| BotError::Discord(format!("Error creating client: {}", e)))?;
+
+    if let Err(why) = client.start().await {
+        return Err(BotError::Discord(format!("Client error: {}", why)));
     }
+
+    Ok(())
 }
 
 #[async_trait]
@@ -334,9 +393,26 @@ impl EventHandler for Bot {
         let http = ctx.http.clone();
         let ctx_arc = Arc::new(ctx);
 
-        self.start_price_loop(http, ctx_arc).await;
+        // Run the price update loop in a separate task so ready() returns
+        // Run the price update loop in a separate task so ready() returns
+        // Cloning Bot is expensive if it has deep state, but here it's Config + Health (Arc-like internals) + Arc<DB>
+        // Use a wrapper or simply spawn the loop with cloned components
+        
+        let config = self.config.clone();
+        let health = self.health.clone();
+        let database = self.database.clone();
+        
+        tokio::spawn(async move {
+            price_update_loop(http, ctx_arc, config, health, database).await;
+        });
 
         info!("Bot initialization complete!");
+    }
+
+    async fn resume(&self, _ctx: Context, _resumed: serenity::model::event::ResumedEvent) {
+        info!("Bot resumed connection to Discord gateway");
+        self.health.update_discord_timestamp();
+        self.health.reset_gateway_failures();
     }
 
     async fn interaction_create(
@@ -373,6 +449,16 @@ impl EventHandler for Bot {
                         }
                     }
                 }
+                "silverchart" => {
+                    debug!("Handling /silverchart command");
+                    if let Err(e) = self.handle_chart_command(&command_interaction, &ctx).await {
+                         error!("Chart command failed: {}", e);
+                         let _ = command_interaction.create_response(&ctx.http, 
+                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(format!("❌ Error: {}", e)))
+                         ).await;
+                    }
+                    Ok(()) // Response handled inside function
+                }
                 _ => {
                     warn!("Unknown command: {}", command_interaction.data.name);
                     let data =
@@ -408,7 +494,22 @@ impl EventHandler for Bot {
 
         // Check if message starts with ! followed by this bot's crypto name OR if bot is mentioned
         let command = format!("!{}", self.config.crypto_name.to_lowercase());
-        let is_command = msg.content.to_lowercase().starts_with(&command);
+        let content_lower = msg.content.to_lowercase();
+        
+        // Handle !shanghai as alias for SHANGHAISILVER
+        let is_shanghai_alias = self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghai";
+        
+        let is_command = content_lower == command || content_lower.starts_with(&format!("{} ", command)) || is_shanghai_alias;
+        
+        // SILVER and SHANGHAISILVER bots respond to their respective chart commands
+        let is_chart = self.config.crypto_name == "SILVER" && content_lower == "!silverchart";
+        
+        let is_shanghai_chart = self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghaichart";
+        
+        // Generic chart command: !<ticker>chart (e.g., !solchart)
+        let generic_chart_cmd = format!("!{}chart", self.config.crypto_name.to_lowercase());
+        let is_generic_chart = msg.content.to_lowercase() == generic_chart_cmd;
+        
         let is_mentioned = msg.mentions_me(&ctx).await.unwrap_or(false);
         
         debug!("Looking for command: '{}' in message: '{}', is_command: {}, is_mentioned: {}", 
@@ -431,6 +532,24 @@ impl EventHandler for Bot {
                     }
                 }
             }
+        } else if is_chart {
+             debug!("Received chart command from {}", msg.author.name);
+             
+             // silverchart always uses SILVER (database history)
+             let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, "SILVER", "📊 30-Day Chart for SILVER").await;
+
+        } else if is_shanghai_chart {
+             debug!("Received !shanghaichart command from {}", msg.author.name);
+             
+             // SHANGHAISILVER uses database history
+             let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, "SHANGHAISILVER", "📊 30-Day Chart for Shanghai Silver").await;
+
+        } else if is_generic_chart {
+             debug!("Received generic chart command from {}", msg.author.name);
+             let crypto_name = &self.config.crypto_name;
+             let title = format!("📊 30-Day History for {}", crypto_name);
+             let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, crypto_name, &title).await;
+
         } else {
             debug!("Message '{}' does not match command '{}'", msg.content, command);
         }
@@ -505,7 +624,7 @@ async fn price_update_loop(
         // Wrap the entire update logic in error handling
         let update_result = async {
             // Get current price with error handling
-            let current_price = match get_crypto_price(&config).await {
+            let current_price = match get_crypto_price(&config, &database).await {
                 Ok(price) => {
                     consecutive_failures = 0; // Reset failure counter on success
                     health.reset_failures();
@@ -537,7 +656,11 @@ async fn price_update_loop(
             let (arrow, change_percent) = database.get_price_indicator(crypto_name, current_price);
 
             // Format the nickname
-            let nickname = format!("{} {}", crypto_name, format_price(current_price));
+            let nickname = if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
+                format!("SILVER {}", format_price(current_price))
+            } else {
+                format!("{} {}", crypto_name, format_price(current_price))
+            };
 
             // Format the custom status with rotation
             let update_count = match get_current_timestamp() {
@@ -570,10 +693,12 @@ async fn price_update_loop(
             debug!("Updating nickname to: {}", nickname);
             debug!("Updating custom status to: {}", custom_status);
 
-            // Update custom status (activity) - this doesn't return a Result
+            // Update custom status (activity) - this doesn't return a Result but we can still track attempts
             ctx.set_activity(Some(ActivityData::playing(custom_status.clone())));
             debug!("Updated activity status");
-            health.reset_gateway_failures();
+            
+            // Note: set_activity doesn't return errors, so we can't directly detect failures here
+            // The periodic Discord test will catch connectivity issues
 
             // Save current price to database with error handling
             if let Err(e) = database.save_price(crypto_name, current_price) {
@@ -593,11 +718,21 @@ async fn price_update_loop(
                     .update_nicknames_in_guilds(&guilds, &nickname)
                     .await;
 
-                // Count successful updates
+                // Count successful updates and track failures more aggressively
                 let successful_updates = results.iter().filter(|r| r.is_ok()).count();
+                let failed_updates = results.iter().filter(|r| r.is_err()).count();
+                
                 if successful_updates > 0 {
                     health.update_discord_timestamp();
+                    // Only reset gateway failures if most updates succeeded
+                    if successful_updates > failed_updates {
+                        health.reset_gateway_failures();
+                    }
                 } else {
+                    // All updates failed - increment gateway failures
+                    health.increment_gateway_failures();
+                    warn!("All {} Discord nickname updates failed", guild_count);
+                    
                     // If no Discord updates succeeded, check if we should exit for restart
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -605,11 +740,16 @@ async fn price_update_loop(
                         .as_secs();
                     let last_discord = health.last_discord_update.load(std::sync::atomic::Ordering::Relaxed);
                     
-                    // If Discord communication has been failing for more than 10 minutes, exit for restart
-                    if now.saturating_sub(last_discord) > 600 {
-                        error!("Discord communication has been failing for over 10 minutes. Exiting for restart.");
+                    // If Discord communication has been failing for more than 2 minutes, exit for restart
+                    if now.saturating_sub(last_discord) > 120 {
+                        error!("Discord communication has been failing for over 2 minutes. Exiting for restart.");
                         return Err(BotError::Discord("Gateway connection lost - restarting".into()));
                     }
+                }
+                
+                // Track partial failures
+                if failed_updates > 0 {
+                    warn!("Some Discord updates failed: {}/{} failed", failed_updates, guild_count);
                 }
 
                 debug!(
@@ -617,7 +757,19 @@ async fn price_update_loop(
                     successful_updates, guild_count
                 );
             } else {
-                debug!("No guilds found in cache");
+                warn!("No guilds found in cache - Discord connection may be lost!");
+                health.increment_gateway_failures();
+                
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let last_discord = health.last_discord_update.load(std::sync::atomic::Ordering::Relaxed);
+                
+                if now.saturating_sub(last_discord) > 120 {
+                    error!("No guilds for over 2 minutes. Exiting for restart.");
+                    return Err(BotError::Discord("Gateway connection lost - no guilds detected".into()));
+                }
             }
 
             Ok(())
@@ -636,6 +788,22 @@ async fn price_update_loop(
 
         // Periodic cleanup of old prices
         database.maybe_cleanup();
+
+        // Periodic Discord connectivity test (every 10 update cycles)
+        let update_count = match get_current_timestamp() {
+            Ok(time) => time / config.update_interval.as_secs(),
+            Err(_) => 0,
+        };
+        
+        if update_count % 10 == 0 {
+            debug!("Running periodic Discord connectivity test for {}", crypto_name);
+            tokio::spawn({
+                let health_clone = health.clone();
+                async move {
+                    test_discord_connectivity(health_clone).await;
+                }
+            });
+        }
 
         // Calculate how long the update took and adjust sleep time
         let loop_duration = loop_start.elapsed();
@@ -737,6 +905,110 @@ fn format_custom_status(
                 _ => unreachable!(),
             }
         }
+        "SILVER" | "XAG" => {
+            // For Silver bot, show Gold/Silver ratio
+            let gold_price = shared_prices.prices.get("GOLD")
+                .or_else(|| shared_prices.prices.get("XAU"))
+                .or_else(|| shared_prices.prices.get("PAXG"))
+                .map(|p| p.price);
+                
+            let ratio_str = if let Some(gold) = gold_price {
+                 format!("Au/Ag: {:.2}", gold / current_price)
+            } else {
+                 format!("{:.8} ₿", btc_amount) // Fallback
+            };
+
+            match update_count {
+                0 => {
+                    if change_percent == 0.0 && arrow == "🔄" {
+                        format!("{} Building history", arrow)
+                    } else {
+                        let change_sign = if change_percent >= 0.0 { "+" } else { "" };
+                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                    }
+                }
+                1 => ratio_str,
+                2 => format!("{:.8} ₿", btc_amount),
+                3 => format!("{:.8} Ξ", eth_amount),
+                _ => unreachable!(),
+            }
+        }
+        "SHANGHAI" => {
+            // For Shanghai bot, scroll through Premium and Premium Percent
+            match update_count {
+                0 | 3 => { // Show arrow/building history on 0 and 3 (half the time, or custom cycle)
+                     // User asked for "always update price... and then cycle 2 and 3 would be underneath"
+                     // Actually user said: "watching area scroll through the price delta 'premium'... and percentage delta"
+                     // The default status (update_count 0) usually shows price change. 
+                     // Let's make it: 
+                     // 0: Price Change (standard)
+                     // 1: Premium $
+                     // 2: Premium %
+                     // 3: Source or back to standard
+                    
+                    if change_percent == 0.0 && arrow == "🔄" {
+                        format!("{} Building history", arrow)
+                    } else {
+                        let change_sign = if change_percent >= 0.0 { "+" } else { "" };
+                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                    }
+                }
+                
+                1 => {
+                    let premium = shared_prices.prices.get("SHANGHAI")
+                        .and_then(|p| p.premium)
+                        .unwrap_or(0.0);
+                    format!("Prem: ${:.2}", premium)
+                }
+                
+                2 => {
+                    let premium_pct = shared_prices.prices.get("SHANGHAI")
+                        .and_then(|p| p.premium_percent)
+                        .unwrap_or(0.0);
+                    format!("Prem: {:.2}%", premium_pct)
+                }
+                _ => unreachable!(),
+            }
+        }
+        "SHANGHAISILVER" => {
+            match update_count {
+                0 | 3 => {
+                    if change_percent == 0.0 && arrow == "🔄" {
+                        format!("{} Building history", arrow)
+                    } else {
+                        let change_sign = if change_percent >= 0.0 { "+" } else { "" };
+                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                    }
+                }
+                
+                1 => {
+                    // Calculate premium: SHANGHAISILVER - SILVER
+                    let silver_price = shared_prices.prices.get("SILVER")
+                        .map(|p| p.price)
+                        .unwrap_or(0.0);
+                    let premium = if silver_price > 0.0 {
+                        current_price - silver_price
+                    } else {
+                        0.0
+                    };
+                    format!("Prem: ${:.2}", premium)
+                }
+                
+                2 => {
+                    // Calculate premium percent
+                    let silver_price = shared_prices.prices.get("SILVER")
+                        .map(|p| p.price)
+                        .unwrap_or(0.0);
+                    let premium_pct = if silver_price > 0.0 {
+                        ((current_price - silver_price) / silver_price) * 100.0
+                    } else {
+                        0.0
+                    };
+                    format!("Prem: {:.2}%", premium_pct)
+                }
+                _ => unreachable!(),
+            }
+        }
         _ => {
             // For other tickers, show all three conversions
             match update_count {
@@ -758,7 +1030,25 @@ fn format_custom_status(
 }
 
 /// Get current cryptocurrency price
-async fn get_crypto_price(config: &BotConfig) -> BotResult<f64> {
+async fn get_crypto_price(config: &BotConfig, database: &Arc<PriceDatabase>) -> BotResult<f64> {
+    // For SHANGHAISILVER, read directly from database (not in prices.json)
+    if config.crypto_name == "SHANGHAISILVER" {
+        debug!("Getting SHANGHAISILVER price from database");
+        match database.get_latest_price(&config.crypto_name) {
+            Ok(price) if price > 0.0 => {
+                debug!("Got SHANGHAISILVER price from database: {}", price);
+                validate_price(price)?;
+                return Ok(price);
+            }
+            Ok(price) => {
+                debug!("Got SHANGHAISILVER price but it's zero or negative: {}", price);
+            }
+            Err(e) => {
+                debug!("Failed to get SHANGHAISILVER from database: {}", e);
+            }
+        }
+    }
+
     // First try to get from shared prices file
     match read_prices_from_file().await {
         Ok(prices) => {
@@ -872,28 +1162,41 @@ async fn get_individual_crypto_price(feed_id: &str) -> BotResult<f64> {
     unreachable!()
 }
 
-/// Start the bot with proper error handling and reconnection capability
-pub async fn start_bot_with_reconnection(config: &BotConfig) -> BotResult<()> {
-    let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
-
-    let bot = Bot::new(config.clone());
-
-    let mut client = Client::builder(&config.discord_token, intents)
-        .event_handler(bot)
+/// Test Discord connectivity by making a simple API call
+async fn test_discord_connectivity(health: Arc<HealthState>) {
+    use reqwest::Client;
+    
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            error!("Failed to create HTTP client for Discord test: {}", e);
+            health.increment_discord_test_failures();
+            return;
+        }
+    };
+    
+    match client
+        .get("https://discord.com/api/v10/gateway")
+        .header("User-Agent", "Discord-Bot-Health-Check/1.0")
+        .send()
         .await
-        .map_err(|e| BotError::Discord(format!("Failed to create client: {}", e)))?;
-
-    info!("Starting Discord client...");
-
-    // Start the client with error handling
-    match client.start().await {
-        Ok(_) => {
-            info!("Discord client started successfully");
-            Ok(())
+    {
+        Ok(response) => {
+            if response.status().is_success() {
+                debug!("Discord connectivity test passed");
+                health.update_discord_test_timestamp();
+                health.reset_discord_test_failures();
+            } else {
+                warn!("Discord connectivity test failed with status: {}", response.status());
+                health.increment_discord_test_failures();
+            }
         }
         Err(e) => {
-            error!("Discord client error: {}", e);
-            Err(BotError::Discord(format!("Client error: {}", e)))
+            warn!("Discord connectivity test failed with error: {}", e);
+            health.increment_discord_test_failures();
         }
     }
 }

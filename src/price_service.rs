@@ -5,17 +5,28 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
-use dotenv::dotenv;
-use rusqlite::{Connection, Result as SqliteResult};
 
 
 const HERMES_API_URL: &str = "https://hermes.pyth.network/api/latest_price_feeds";
-const DATABASE_PATH: &str = "shared/prices.db";
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct PriceData {
     pub price: f64,
     pub timestamp: u64,
+    // Optional fields for detailed data (e.g., Shanghai Premium)
+    pub premium: Option<f64>,
+    pub premium_percent: Option<f64>,
+    pub source: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct HistoryData {
+    pub date: String, // "YYYY-MM-DD"
+    pub shanghai: f64,
+    pub western: f64,
+    pub premium: f64,
+    #[serde(rename = "premiumPercent")]
+    pub premium_percent: f64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -26,81 +37,7 @@ pub struct PricesFile {
 
 
 
-fn init_database() -> SqliteResult<Connection> {
-    // Create shared directory if it doesn't exist
-    let shared_dir = "shared";
-    if !Path::new(shared_dir).exists() {
-        fs::create_dir(shared_dir).map_err(|e| rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
-            Some(format!("Failed to create shared directory: {}", e))
-        ))?;
-        println!("📁 Created shared directory");
-    }
-    
-    let conn = Connection::open(DATABASE_PATH)?;
-    
-    // Create prices table if it doesn't exist
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS prices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            crypto_name TEXT NOT NULL,
-            price REAL NOT NULL,
-            timestamp INTEGER NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )",
-        [],
-    )?;
-    
-    // Create index for faster queries
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_crypto_timestamp ON prices(crypto_name, timestamp)",
-        [],
-    )?;
-    
-    println!("🗄️ Database initialized at {}", DATABASE_PATH);
-    Ok(conn)
-}
 
-fn store_prices_in_db(conn: &Connection, prices: &HashMap<String, PriceData>) -> SqliteResult<()> {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
-            Some(format!("System time error: {}", e))
-        ))?
-        .as_secs();
-    
-    for (crypto_name, price_data) in prices {
-        conn.execute(
-            "INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)",
-            [&crypto_name, &price_data.price.to_string(), &timestamp.to_string()],
-        )?;
-    }
-    
-    Ok(())
-}
-
-fn cleanup_old_prices(conn: &Connection) -> SqliteResult<()> {
-    // Delete prices older than 60 days (60 * 24 * 60 * 60 = 5184000 seconds)
-    let sixty_days_ago = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
-            Some(format!("System time error: {}", e))
-        ))?
-        .as_secs() - 5184000;
-    
-    let deleted = conn.execute(
-        "DELETE FROM prices WHERE timestamp < ?",
-        [&sixty_days_ago.to_string()],
-    )?;
-    
-    if deleted > 0 {
-        println!("🧹 Cleaned up {} old price records (older than 60 days)", deleted);
-    }
-    
-    Ok(())
-}
 
 fn get_feed_ids() -> HashMap<String, String> {
     let mut feeds = HashMap::new();
@@ -187,14 +124,123 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
     unreachable!()
 }
 
+pub async fn fetch_shanghai_history(range: &str, symbol: Option<&str>) -> Result<Vec<HistoryData>, Box<dyn std::error::Error + Send + Sync>> {
+    let symbol_param = symbol.unwrap_or("");
+    let url = format!(
+        "https://metalcharts.org/api/shanghai/history?range={}{}", 
+        range,
+        if symbol_param.is_empty() { "".to_string() } else { format!("&symbol={}", symbol_param) }
+    );
+    
+    // println!("Fetching history from: {}", url); // Debug
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let response = client.get(&url)
+        .header("Origin", "https://metalcharts.org")
+        .header("Referer", "https://metalcharts.org/")
+        .header("User-Agent", "Mozilla/5.0 (compatible; RustyMcPriceface/1.0)")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Shanghai History API request failed: {}", response.status()).into());
+    }
+
+    let json: Value = response.json().await?;
+    
+    // The API returns { data: [...], symbol: "..." }
+    if let Some(data_array) = json.get("data") {
+        let history: Vec<HistoryData> = serde_json::from_value(data_array.clone())?;
+        return Ok(history);
+    }
+
+    Err("Failed to parse Shanghai History JSON structure".into())
+}
+
+async fn fetch_yahoo_price(ticker: &str) -> Result<PriceData, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=1d", ticker);
+    const MAX_RETRIES: u32 = 3;
+
+    for attempt in 1..=MAX_RETRIES {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
+
+        match client.get(&url)
+            .header("User-Agent", "Mozilla/5.0 (compatible; RustyMcPriceface/1.0)")
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    println!("❌ Yahoo API request failed for {} (attempt {}): {}", ticker, attempt, response.status());
+                    if attempt < MAX_RETRIES {
+                        tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(format!("Yahoo API HTTP request failed: {}", response.status()).into());
+                }
+
+                match response.json::<Value>().await {
+                    Ok(json) => {
+                        // Navigate to chart.result[0].meta.regularMarketPrice
+                        if let Some(result) = json.get("chart").and_then(|c| c.get("result")).and_then(|r| r.get(0)) {
+                            if let Some(meta) = result.get("meta") {
+                                let price = meta.get("regularMarketPrice").and_then(|p| p.as_f64())
+                                    .ok_or("Missing regularMarketPrice")?;
+                                
+                                // Parse timestamp if available, else use current
+                                let timestamp = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)?
+                                    .as_secs();
+
+                                return Ok(PriceData {
+                                    price,
+                                    timestamp,
+                                    premium: None,
+                                    premium_percent: None,
+                                    source: Some("yahoo".to_string()),
+                                });
+                            }
+                        }
+                        return Err("Failed to parse Yahoo JSON structure".into());
+                    }
+                    Err(e) => {
+                         println!("❌ Yahoo JSON parsing failed: {}", e);
+                         return Err(e.into());
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Yahoo Network request failed: {}", e);
+                if attempt < MAX_RETRIES {
+                    tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(e.into());
+            }
+        }
+    }
+    Err("Max retries exceeded for Yahoo API".into())
+}
+
 async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Send + Sync>> {
     let feeds = get_feed_ids();
     let mut prices = HashMap::new();
     
-    for (crypto, feed_id) in feeds {
+    for (crypto, feed_id) in &feeds {
         match get_crypto_price(&feed_id).await {
             Ok(price) => {
-                prices.insert(crypto.clone(), PriceData { price, timestamp: 0 });
+                prices.insert(crypto.clone(), PriceData { 
+                    price, 
+                    timestamp: 0,
+                    premium: None,
+                    premium_percent: None,
+                    source: None
+                });
                 println!("✅ Fetched {} price: ${:.6}", crypto, price);
             }
             Err(e) => {
@@ -207,7 +253,39 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                     "WIF" => 2.0,
                     _ => 1.0,
                 };
-                prices.insert(crypto, PriceData { price: default_price, timestamp: 0 });
+                prices.insert(crypto.clone(), PriceData { 
+                    price: default_price, 
+                    timestamp: 0,
+                    premium: None,
+                    premium_percent: None,
+                    source: None
+                });
+            }
+        }
+    }
+
+    // Shanghai Silver API disabled - using regular SILVER from Pyth network instead
+    // if feeds.contains_key("SHANGHAI") {
+    //     match fetch_shanghai_price().await {
+    //         Ok(data) => {
+    //             prices.insert("SHANGHAI".to_string(), data.clone());
+    //              println!("✅ Fetched SHANGHAI price: ${:.2} (Premium: ${:.2})", data.price, data.premium.unwrap_or(0.0));
+    //         }
+    //         Err(e) => {
+    //              println!("❌ Failed to fetch SHANGHAI price: {}", e);
+    //         }
+    //     }
+    // }
+
+    // Fetch DXY via Yahoo if configured
+    if feeds.contains_key("DXY") {
+        match fetch_yahoo_price("DX-Y.NYB").await {
+            Ok(data) => {
+                prices.insert("DXY".to_string(), data.clone());
+                 println!("✅ Fetched DXY price: ${:.2}", data.price);
+            }
+            Err(e) => {
+                 println!("❌ Failed to fetch DXY price: {}", e);
             }
         }
     }
@@ -235,10 +313,105 @@ async fn write_prices_to_file(prices: &PricesFile, file_path: &str) -> Result<()
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
-    dotenv().ok();
+use crate::database::PriceDatabase;
+use tracing::{info, error, warn};
+use std::sync::Arc;
+
+const GOLDSILVER_AI_URL: &str = "https://goldsilver.ai/metal-prices/shanghai-silver-price";
+
+pub async fn fetch_shanghai_silver_price() -> Result<PriceData, Box<dyn std::error::Error + Send + Sync>> {
+    // Use goldsilver.ai for Shanghai Spot price
+    let (shanghai_spot, western_spot) = fetch_goldsilver_ai_prices().await?;
+
+    let premium = shanghai_spot - western_spot;
+    let premium_percent = (premium / western_spot) * 100.0;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+
+    info!(
+        "✅ Shanghai Silver Spot: ${:.2} | Western Spot: ${:.2} | Premium: ${:.2} (+{:.2}%)",
+        shanghai_spot, western_spot, premium, premium_percent
+    );
+
+    Ok(PriceData {
+        price: shanghai_spot,
+        timestamp,
+        premium: Some(premium),
+        premium_percent: Some(premium_percent),
+        source: Some("shanghaisilver_spot".to_string()),
+    })
+}
+
+async fn fetch_goldsilver_ai_prices() -> Result<(f64, f64), Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let response = client.get(GOLDSILVER_AI_URL)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await?;
+
+    let text = response.text().await?;
+
+    extract_goldsilver_prices(&text)
+}
+
+fn extract_goldsilver_prices(html: &str) -> Result<(f64, f64), Box<dyn std::error::Error + Send + Sync>> {
+    // Debug: print a snippet of the HTML around "Shanghai Spot"
+    if let Some(pos) = html.find("Shanghai Spot") {
+        let start = pos.saturating_sub(50);
+        let end = (pos + 100).min(html.len());
+        let snippet = &html[start..end];
+        info!("HTML snippet around Shanghai Spot: {:?}", snippet);
+    }
     
+    // More flexible: find the first number after "Shanghai Spot"
+    let shanghai_spot = extract_first_number_after(html, "Shanghai Spot")
+        .ok_or("Failed to extract Shanghai Spot price")?;
+
+    // More flexible: find the first number after "Western Spot"  
+    let western_spot = extract_first_number_after(html, "Western Spot")
+        .ok_or("Failed to extract Western Spot price")?;
+
+    info!("Extracted Shanghai Spot: ${:.2}, Western Spot: ${:.2}", shanghai_spot, western_spot);
+
+    Ok((shanghai_spot, western_spot))
+}
+
+fn extract_first_number_after(html: &str, prefix: &str) -> Option<f64> {
+    if let Some(pos) = html.find(prefix) {
+        let after_prefix = &html[pos + prefix.len()..];
+        // Look for digits
+        let mut chars = after_prefix.chars().peekable();
+        let mut number_str = String::new();
+        
+        // Collect digits and decimal point
+        while let Some(&c) = chars.peek() {
+            if c.is_ascii_digit() || c == '.' {
+                number_str.push(c);
+                chars.next();
+            } else if !number_str.is_empty() {
+                // Stop when we hit non-digit after starting number
+                break;
+            } else {
+                // Skip non-digit characters before number
+                chars.next();
+            }
+        }
+        
+        if !number_str.is_empty() {
+            return number_str.parse::<f64>().ok();
+        }
+    }
+    None
+}
+
+pub async fn run(database: Arc<PriceDatabase>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Get update interval from environment
     let update_interval = std::env::var("UPDATE_INTERVAL_SECONDS")
         .unwrap_or_else(|_| "12".to_string())
@@ -249,33 +422,21 @@ async fn main() {
     let shared_dir = "shared";
     if !Path::new(shared_dir).exists() {
         if let Err(e) = fs::create_dir(shared_dir) {
-            eprintln!("Failed to create shared directory: {}", e);
-            return;
+            error!("Failed to create shared directory: {}", e);
+            return Err(e.into());
         }
-        println!("📁 Created shared directory");
+        info!("📁 Created shared directory");
     }
     
     let file_path = format!("{}/prices.json", shared_dir);
     
-    // Initialize database
-    let conn = match init_database() {
-        Ok(conn) => conn,
-        Err(e) => {
-            eprintln!("❌ Failed to initialize database: {}", e);
-            return;
-        }
-    };
-    
-    println!("🚀 Starting Price Service...");
-    println!("📊 Update interval: {} seconds", update_interval);
-    println!("📁 Prices file: {}", file_path);
-    println!("🗄️ Database: {}", DATABASE_PATH);
+    info!("🚀 Starting Price Service Task...");
+    info!("📊 Update interval: {} seconds", update_interval);
+    info!("📁 Prices file: {}", file_path);
     
     // Print configured cryptos
     let feeds = get_feed_ids();
-    println!("🪙 Tracking cryptos: {}", feeds.keys().cloned().collect::<Vec<_>>().join(", "));
-    
-    let mut cleanup_counter = 0;
+    info!("🪙 Tracking cryptos: {}", feeds.keys().cloned().collect::<Vec<_>>().join(", "));
     
     let mut consecutive_failures = 0;
     const MAX_CONSECUTIVE_FAILURES: u32 = 5;
@@ -289,36 +450,26 @@ async fn main() {
                 
                 // Store in JSON file (for backward compatibility)
                 if let Err(e) = write_prices_to_file(&prices, &file_path).await {
-                    println!("❌ Failed to write prices to JSON: {}", e);
+                    error!("❌ Failed to write prices to JSON: {}", e);
                 } else {
-                    println!("📝 Successfully wrote prices to JSON file");
+                    // info!("📝 Successfully wrote prices to JSON file"); // Verbose
                 }
                 
-                // Store in SQLite database
-                if let Err(e) = store_prices_in_db(&conn, &prices.prices) {
-                    println!("❌ Failed to store prices in database: {}", e);
-                } else {
-                    println!("💾 Stored prices in database");
-                }
-                
-                // Clean up old prices every 100 updates (about 20 minutes)
-                cleanup_counter += 1;
-                if cleanup_counter >= 100 {
-                    if let Err(e) = cleanup_old_prices(&conn) {
-                        println!("❌ Failed to cleanup old prices: {}", e);
-                    } else {
-                        println!("🧹 Database cleanup completed");
+                // Store in SQLite database using shared pool
+                for (crypto, price_data) in &prices.prices {
+                    if let Err(e) = database.save_price(crypto, price_data.price) {
+                        error!("❌ Failed to store {} price in database: {}", crypto, e);
                     }
-                    cleanup_counter = 0;
                 }
+                // info!("💾 Stored prices in database"); // Verbose
             }
             Err(e) => {
                 consecutive_failures += 1;
-                println!("❌ Failed to fetch prices (failure {}/{}): {}", 
+                error!("❌ Failed to fetch prices (failure {}/{}): {}", 
                         consecutive_failures, MAX_CONSECUTIVE_FAILURES, e);
                 
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                    println!("⚠️ Too many consecutive failures. Entering recovery mode for 60 seconds...");
+                    warn!("⚠️ Too many consecutive failures. Entering recovery mode for 60 seconds...");
                     sleep(Duration::from_secs(60)).await;
                     consecutive_failures = 0; // Reset after recovery delay
                 }
@@ -331,10 +482,9 @@ async fn main() {
         
         if loop_duration < target_interval {
             let sleep_time = target_interval - loop_duration;
-            println!("⏱️ Update took {:?}, sleeping for {:?}", loop_duration, sleep_time);
             sleep(sleep_time).await;
         } else {
-            println!("⚠️ Update took longer than interval: {:?} > {:?}", loop_duration, target_interval);
+            warn!("⚠️ Update took longer than interval: {:?} > {:?}", loop_duration, target_interval);
             // Still sleep for a minimum time to prevent tight loops
             sleep(Duration::from_secs(1)).await;
         }

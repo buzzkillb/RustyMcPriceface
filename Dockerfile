@@ -1,42 +1,59 @@
-# Build stage - compile Rust binaries for musl
-FROM rust:1.82-alpine AS builder
+# Build stage - compile Rust binaries
+FROM rust:slim-bookworm AS builder
 
 # Install build dependencies
-RUN apk add --no-cache \
-    musl-dev \
-    pkgconfig \
-    openssl-dev \
-    openssl-libs-static
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    libfreetype6-dev \
+    libfontconfig1-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy source code
-COPY Cargo.toml ./
-COPY Cargo.lock* ./
+# Copy manifests first
+COPY Cargo.toml Cargo.lock ./
+
+# Create dummy src/main.rs to build dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN echo "fn main() {}" > src/db_query.rs
+RUN echo "fn main() {}" > src/db_cleanup.rs
+RUN echo "fn main() {}" > src/price_service.rs
+RUN echo "fn main() {}" > src/shanghai_price_service.rs
+
+# Build dependencies
+RUN cargo build --release
+
+# Now remove dummy source
+RUN rm -rf src
+
+# Copy actual source code
 COPY src/ ./src/
 
-# Build for musl target (static linking)
-ENV RUSTFLAGS="-C target-feature=+crt-static"
-RUN cargo build --release --target x86_64-unknown-linux-musl
+# Build the actual application
+# We touch the main files to ensure cargo rebuilds them
+RUN touch src/main.rs src/price_service.rs src/shanghai_price_service.rs
+# Build only the main discord-bot binary
+RUN cargo build --release --bin discord-bot
 
-# Runtime stage - minimal Alpine image
-FROM alpine:3.19
+# Runtime stage
+FROM debian:bookworm-slim
 
-# Install only runtime dependencies
-RUN apk add --no-cache \
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     jq \
-    && addgroup -g 1000 appuser \
-    && adduser -D -s /bin/sh -u 1000 -G appuser appuser
+    libfreetype6 \
+    libfontconfig1 \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
-# Copy binaries from builder stage
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/price-service ./price-service
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/discord-bot ./discord-bot
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/db-query ./db-query
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/db-cleanup ./db-cleanup
+# Copy the single monolithic binary
+COPY --from=builder /app/target/release/discord-bot ./rustymcpriceface
 
 # Create shared directory and set permissions
 RUN mkdir -p /app/shared \
@@ -45,5 +62,8 @@ RUN mkdir -p /app/shared \
 # Switch to non-root user for security
 USER appuser
 
+# Expose port for health check
+EXPOSE 8080
+
 # Default command
-CMD ["./price-service"] 
+CMD ["./rustymcpriceface"]

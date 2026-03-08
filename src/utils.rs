@@ -6,15 +6,19 @@ pub fn validate_crypto_name(name: &str) -> BotResult<()> {
     if name.is_empty() {
         return Err(BotError::InvalidInput("Crypto name cannot be empty".into()));
     }
-    
+
     if name.len() > 10 {
-        return Err(BotError::InvalidInput("Crypto name too long (max 10 chars)".into()));
+        return Err(BotError::InvalidInput(
+            "Crypto name too long (max 10 chars)".into(),
+        ));
     }
-    
+
     if !name.chars().all(|c| c.is_alphanumeric()) {
-        return Err(BotError::InvalidInput("Crypto name must be alphanumeric".into()));
+        return Err(BotError::InvalidInput(
+            "Crypto name must be alphanumeric".into(),
+        ));
     }
-    
+
     Ok(())
 }
 
@@ -62,6 +66,10 @@ pub fn get_crypto_emoji(crypto: &str) -> &'static str {
         "BCH" => "₿",
         "XRP" => "💎",
         "TRX" => "⚡",
+        "EURO" => "💶",
+        "SHANGHAI" => "🇨🇳",
+        "SHANGHAISILVER" => "🇨🇳",
+        "DXY" => "🇺🇸",
         _ => "🪙",
     }
 }
@@ -71,11 +79,11 @@ pub fn validate_price(price: f64) -> BotResult<()> {
     if price.is_nan() || price.is_infinite() {
         return Err(BotError::InvalidInput("Invalid price value".into()));
     }
-    
+
     if price < 0.0 {
         return Err(BotError::InvalidInput("Price cannot be negative".into()));
     }
-    
+
     Ok(())
 }
 
@@ -83,11 +91,13 @@ pub fn validate_price(price: f64) -> BotResult<()> {
 pub fn calculate_percentage_change(current: f64, previous: f64) -> BotResult<f64> {
     validate_price(current)?;
     validate_price(previous)?;
-    
+
     if previous == 0.0 {
-        return Err(BotError::InvalidInput("Previous price cannot be zero".into()));
+        return Err(BotError::InvalidInput(
+            "Previous price cannot be zero".into(),
+        ));
     }
-    
+
     Ok(((current - previous) / previous) * 100.0)
 }
 
@@ -100,4 +110,4 @@ pub fn get_change_arrow(change_percent: f64) -> &'static str {
     } else {
         "➡️"
     }
-} 
+}
