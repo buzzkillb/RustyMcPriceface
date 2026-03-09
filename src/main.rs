@@ -119,7 +119,7 @@ async fn main() -> BotResult<()> {
                 let emoji = utils::get_crypto_emoji(&ticker);
                 info!("{} Starting {} bot...", emoji, ticker);
 
-                match start_bot(bot_config.clone(), db_clone.clone(), health_clone.clone()).await {
+                match start_bot(bot_config.clone(), db_clone.clone(), health_clone.clone(), health_agg_clone.clone()).await {
                     Ok(_) => {
                         error!("{} {} bot exited unexpectedly", emoji, ticker);
                     },
