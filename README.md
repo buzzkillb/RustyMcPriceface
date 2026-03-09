@@ -7,6 +7,15 @@ Discord bot that tracks cryptocurrency and asset prices using Pyth Network and p
 - Docker and Docker Compose
 - A Discord application with bot tokens
 
+## Tech Stack
+
+- Rust (edition 2021)
+- Serenity (Discord bot library)
+- SQLite (database)
+- Pyth Network (price feeds)
+- Axum (HTTP server for health checks)
+- Plotters (chart generation)
+
 ## Setup
 
 1. Copy the example environment file:
