@@ -490,8 +490,9 @@ impl EventHandler for Bot {
                         let healthy_bots = status.get("healthy_bots").and_then(|v| v.as_u64()).unwrap_or(0);
                         
                         let mut lines = vec![
-                            "System Status".to_string(),
-                            format!("Total Bots: {} | Healthy: {}", total_bots, healthy_bots),
+                            "```".to_string(),
+                            format!("{:14} {:>6} {:>8} {:>6} {:>6}", "Bot", "Status", "Uptime", "Fails", "GW"),
+                            "----------------------------------------------------------------".to_string(),
                         ];
                         
                         if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
@@ -502,17 +503,22 @@ impl EventHandler for Bot {
                                 let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
                                 let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
                                 let uptime = format_uptime(uptime_secs);
+                                let status_str = if healthy { "OK" } else { "DOWN" };
                                 
                                 lines.push(format!(
-                                    "{}: {} | Uptime: {} | Fails: {} | GW: {}", 
+                                    "{:14} {:>6} {:>8} {:>6} {:>6}", 
                                     name, 
-                                    if healthy { "OK" } else { "DOWN" },
+                                    status_str,
                                     uptime,
                                     failures,
                                     gateway_failures
                                 ));
                             }
                         }
+                        
+             lines.push("----------------------------------------------------------------".to_string());
+                        lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
+                        lines.push("```".to_string());
                         
                         let message = lines.join("\n");
                         let _ = command_interaction.create_response(&ctx.http,
@@ -568,6 +574,9 @@ impl EventHandler for Bot {
         
         let is_shanghai_chart = self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghaichart";
         
+        // !status command - only BTC bot responds
+        let is_status = self.config.crypto_name == "BTC" && content_lower == "!status";
+        
         // Generic chart command: !<ticker>chart (e.g., !solchart)
         let generic_chart_cmd = format!("!{}chart", self.config.crypto_name.to_lowercase());
         let is_generic_chart = msg.content.to_lowercase() == generic_chart_cmd;
@@ -611,6 +620,47 @@ impl EventHandler for Bot {
              let crypto_name = &self.config.crypto_name;
              let title = format!("📊 30-Day History for {}", crypto_name);
              let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, crypto_name, &title).await;
+
+        } else if is_status {
+             debug!("Received !status command from {}", msg.author.name);
+             let status = self.health_aggregator.to_json();
+             let total_bots = status.get("total_bots").and_then(|v| v.as_u64()).unwrap_or(0);
+             let healthy_bots = status.get("healthy_bots").and_then(|v| v.as_u64()).unwrap_or(0);
+             
+             let mut lines = vec![
+                 "```".to_string(),
+                 format!("{:14} {:>6} {:>8} {:>6} {:>6}", "Bot", "Status", "Uptime", "Fails", "GW"),
+                 "----------------------------------------------------------------".to_string(),
+             ];
+             
+             if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
+                 for bot in bots {
+                     let name = bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
+                     let healthy = bot.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+                     let failures = bot.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                     let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                     let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+                     let uptime = format_uptime(uptime_secs);
+                     let status_str = if healthy { "OK" } else { "DOWN" };
+                     
+                     lines.push(format!(
+                         "{:14} {:>6} {:>8} {:>6} {:>6}", 
+                         name, 
+                         status_str,
+                         uptime,
+                         failures,
+                         gateway_failures
+                     ));
+                 }
+             }
+             
+             lines.push("--------------------------------------------------------".to_string());
+             lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
+             lines.push("```".to_string());
+             
+             let message = lines.join("\n");
+             let _ = msg.channel_id.say(&ctx.http, message).await;
+             self.health.update_discord_timestamp();
 
         } else {
             debug!("Message '{}' does not match command '{}'", msg.content, command);
