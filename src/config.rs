@@ -68,6 +68,9 @@ impl BotConfig {
 }
 
 /// Constants for the application
+pub const DATABASE_PATH: &str = "shared/prices.db";
+
+/// Price history retention in days
 pub const PRICE_HISTORY_DAYS: u64 = 365; // Keep 1 year of history
 
 /// Data retention tiers for aggregation

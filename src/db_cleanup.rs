@@ -1,5 +1,5 @@
 use crate::errors::{BotError, BotResult};
-use crate::config::{RAW_DATA_RETENTION_HOURS, MINUTE_DATA_RETENTION_DAYS, FIVE_MINUTE_DATA_RETENTION_DAYS, FIFTEEN_MINUTE_DATA_RETENTION_DAYS};
+use crate::config::{RAW_DATA_RETENTION_HOURS, MINUTE_DATA_RETENTION_DAYS, FIVE_MINUTE_DATA_RETENTION_DAYS, FIFTEEN_MINUTE_DATA_RETENTION_DAYS, DATABASE_PATH};
 use crate::health::HealthState;
 
 use rusqlite::Connection;
@@ -7,8 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, error, debug};
-
-const DATABASE_PATH: &str = "shared/prices.db";
 
 /// Database cleanup service for aggregating and compacting price data
 pub struct DatabaseCleanup {
