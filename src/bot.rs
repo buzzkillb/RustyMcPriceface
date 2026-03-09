@@ -2,7 +2,7 @@ use crate::config::BotConfig;
 use crate::database::PriceDatabase;
 use crate::discord_api::DiscordApi;
 use crate::errors::{BotError, BotResult};
-use crate::health::HealthState;
+use crate::health::{HealthState, HealthAggregator};
 
 use crate::price_service::PricesFile;
 use crate::utils::{
@@ -32,20 +32,35 @@ use tracing::{debug, error, info, warn};
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 const RECONNECT_DELAY_SECONDS: u64 = 30;
 
+fn format_uptime(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let mins = (seconds % 3600) / 60;
+    if days > 0 {
+        format!("{}d{}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h{}m", hours, mins)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
 /// Discord bot for tracking cryptocurrency prices
 #[derive(Debug, Clone)]
 pub struct Bot {
     config: BotConfig,
     health: Arc<HealthState>,
+    health_aggregator: Arc<HealthAggregator>,
     database: Arc<PriceDatabase>,
 }
 
 impl Bot {
     /// Create a new bot instance with configuration, shared database, and health state
-    pub fn new(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>) -> BotResult<Self> {
+    pub fn new(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>, health_aggregator: Arc<HealthAggregator>) -> BotResult<Self> {
         Ok(Self {
             config,
             health,
+            health_aggregator,
             database,
         })
     }
@@ -72,6 +87,9 @@ impl Bot {
         let chart_command = CreateCommand::new("silverchart")
             .description("Get a 1-year historical chart for the current crypto");
 
+        let status_command = CreateCommand::new("status")
+            .description("Get bot system status (BTC bot only)");
+
         info!("Creating global command...");
 
         Command::create_global_command(http, price_command)
@@ -81,6 +99,10 @@ impl Bot {
         Command::create_global_command(http, chart_command)
             .await
             .map_err(|e| BotError::Discord(format!("Failed to register /silverchart command: {}", e)))?;
+
+        Command::create_global_command(http, status_command)
+            .await
+            .map_err(|e| BotError::Discord(format!("Failed to register /status command: {}", e)))?;
 
         info!("Successfully registered /price command globally");
         info!("Note: Global commands can take up to 1 hour to appear in Discord");
@@ -339,11 +361,11 @@ impl Bot {
 }
 
 /// Helper to start a bot instance (used by main.rs)
-pub async fn start_bot(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>) -> BotResult<()> {
+pub async fn start_bot(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>, health_aggregator: Arc<HealthAggregator>) -> BotResult<()> {
     let token = config.discord_token.clone();
     let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
-    let bot = Bot::new(config, database, health)?;
+    let bot = Bot::new(config, database, health, health_aggregator)?;
 
     let mut client = Client::builder(&token, intents)
         .event_handler(bot)
@@ -459,6 +481,52 @@ impl EventHandler for Bot {
                     }
                     Ok(()) // Response handled inside function
                 }
+                "status" => {
+                    debug!("Handling /status command");
+                    // Only BTC bot responds to status
+                    if self.config.crypto_name == "BTC" {
+                        let status = self.health_aggregator.to_json();
+                        let total_bots = status.get("total_bots").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let healthy_bots = status.get("healthy_bots").and_then(|v| v.as_u64()).unwrap_or(0);
+                        
+                        let mut lines = vec![
+                            "```".to_string(),
+                            format!("{:14} {:>6} {:>8} {:>6} {:>6}", "Bot", "Status", "Uptime", "Fails", "GW"),
+                            "----------------------------------------------------------------".to_string(),
+                        ];
+                        
+                        if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
+                            for bot in bots {
+                                let name = bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
+                                let healthy = bot.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let failures = bot.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let uptime = format_uptime(uptime_secs);
+                                let status_str = if healthy { "OK" } else { "DOWN" };
+                                
+                                lines.push(format!(
+                                    "{:14} {:>6} {:>8} {:>6} {:>6}", 
+                                    name, 
+                                    status_str,
+                                    uptime,
+                                    failures,
+                                    gateway_failures
+                                ));
+                            }
+                        }
+                        
+             lines.push("----------------------------------------------------------------".to_string());
+                        lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
+                        lines.push("```".to_string());
+                        
+                        let message = lines.join("\n");
+                        let _ = command_interaction.create_response(&ctx.http,
+                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(message))
+                        ).await;
+                    }
+                    Ok(())
+                }
                 _ => {
                     warn!("Unknown command: {}", command_interaction.data.name);
                     let data =
@@ -506,6 +574,9 @@ impl EventHandler for Bot {
         
         let is_shanghai_chart = self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghaichart";
         
+        // !status command - only BTC bot responds
+        let is_status = self.config.crypto_name == "BTC" && content_lower == "!status";
+        
         // Generic chart command: !<ticker>chart (e.g., !solchart)
         let generic_chart_cmd = format!("!{}chart", self.config.crypto_name.to_lowercase());
         let is_generic_chart = msg.content.to_lowercase() == generic_chart_cmd;
@@ -549,6 +620,47 @@ impl EventHandler for Bot {
              let crypto_name = &self.config.crypto_name;
              let title = format!("📊 30-Day History for {}", crypto_name);
              let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, crypto_name, &title).await;
+
+        } else if is_status {
+             debug!("Received !status command from {}", msg.author.name);
+             let status = self.health_aggregator.to_json();
+             let total_bots = status.get("total_bots").and_then(|v| v.as_u64()).unwrap_or(0);
+             let healthy_bots = status.get("healthy_bots").and_then(|v| v.as_u64()).unwrap_or(0);
+             
+             let mut lines = vec![
+                 "```".to_string(),
+                 format!("{:14} {:>6} {:>8} {:>6} {:>6}", "Bot", "Status", "Uptime", "Fails", "GW"),
+                 "----------------------------------------------------------------".to_string(),
+             ];
+             
+             if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
+                 for bot in bots {
+                     let name = bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
+                     let healthy = bot.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+                     let failures = bot.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                     let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                     let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+                     let uptime = format_uptime(uptime_secs);
+                     let status_str = if healthy { "OK" } else { "DOWN" };
+                     
+                     lines.push(format!(
+                         "{:14} {:>6} {:>8} {:>6} {:>6}", 
+                         name, 
+                         status_str,
+                         uptime,
+                         failures,
+                         gateway_failures
+                     ));
+                 }
+             }
+             
+             lines.push("--------------------------------------------------------".to_string());
+             lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
+             lines.push("```".to_string());
+             
+             let message = lines.join("\n");
+             let _ = msg.channel_id.say(&ctx.http, message).await;
+             self.health.update_discord_timestamp();
 
         } else {
             debug!("Message '{}' does not match command '{}'", msg.content, command);
