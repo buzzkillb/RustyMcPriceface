@@ -32,6 +32,19 @@ use tracing::{debug, error, info, warn};
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 const RECONNECT_DELAY_SECONDS: u64 = 30;
 
+fn format_uptime(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let mins = (seconds % 3600) / 60;
+    if days > 0 {
+        format!("{}d{}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h{}m", hours, mins)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
 /// Discord bot for tracking cryptocurrency prices
 #[derive(Debug, Clone)]
 pub struct Bot {
@@ -487,11 +500,14 @@ impl EventHandler for Bot {
                                 let healthy = bot.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
                                 let failures = bot.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0);
                                 let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let uptime = format_uptime(uptime_secs);
                                 
                                 lines.push(format!(
-                                    "{}: {} | Failures: {} | Gateway: {}", 
+                                    "{}: {} | Uptime: {} | Fails: {} | GW: {}", 
                                     name, 
-                                    if healthy { "OK" } else { "UNHEALTHY" },
+                                    if healthy { "OK" } else { "DOWN" },
+                                    uptime,
                                     failures,
                                     gateway_failures
                                 ));

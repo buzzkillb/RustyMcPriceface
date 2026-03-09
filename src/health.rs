@@ -13,11 +13,16 @@ pub struct HealthState {
     pub consecutive_failures: Arc<AtomicU64>,
     pub gateway_failures: Arc<AtomicU64>,
     pub discord_test_failures: Arc<AtomicU64>,
+    pub start_time: Arc<AtomicU64>,
     pub bot_name: String,
 }
 
 impl HealthState {
     pub fn new(bot_name: String) -> Self {
+        let start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         Self {
             last_price_update: Arc::new(AtomicU64::new(0)),
             last_db_write: Arc::new(AtomicU64::new(0)),
@@ -26,6 +31,7 @@ impl HealthState {
             consecutive_failures: Arc::new(AtomicU64::new(0)),
             gateway_failures: Arc::new(AtomicU64::new(0)),
             discord_test_failures: Arc::new(AtomicU64::new(0)),
+            start_time: Arc::new(AtomicU64::new(start)),
             bot_name,
         }
     }
@@ -86,6 +92,15 @@ impl HealthState {
         self.discord_test_failures.store(0, Ordering::Relaxed);
     }
 
+    pub fn get_uptime_seconds(&self) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let start = self.start_time.load(Ordering::Relaxed);
+        now.saturating_sub(start)
+    }
+
     pub fn is_healthy(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -138,10 +153,12 @@ impl HealthState {
         let failures = self.consecutive_failures.load(Ordering::Relaxed);
         let gateway_failures = self.gateway_failures.load(Ordering::Relaxed);
         let discord_test_failures = self.discord_test_failures.load(Ordering::Relaxed);
+        let uptime = self.get_uptime_seconds();
 
         json!({
             "bot_name": self.bot_name,
             "healthy": self.is_healthy(),
+            "uptime_seconds": uptime,
             "timestamp": now,
             "last_price_update": last_price,
             "last_db_write": last_db,
