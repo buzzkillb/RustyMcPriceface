@@ -248,10 +248,16 @@ impl DatabaseCleanup {
         
         info!("   🗑️ Starting deletion of {} old raw records (this may take a while)...", count);
         
-        // Use a simpler delete query - just delete old data regardless of aggregation status
-        // This is safer and faster than the complex EXISTS query
+        // Only delete raw data that has been successfully aggregated
         let deleted = conn.execute(
-            "DELETE FROM prices WHERE timestamp < ?",
+            "DELETE FROM prices 
+             WHERE timestamp < ? 
+             AND EXISTS (
+                 SELECT 1 FROM price_aggregates pa 
+                 WHERE pa.crypto_name = prices.crypto_name 
+                 AND pa.bucket_start <= prices.timestamp 
+                 AND pa.bucket_start + pa.bucket_duration > prices.timestamp
+             )",
             [cutoff_time as i64],
         )?;
 

@@ -25,7 +25,15 @@ impl PriceDatabase {
             c.execute_batch(
                 "PRAGMA journal_mode = WAL;  -- Enable WAL mode
                      PRAGMA busy_timeout = 30000;  -- Set busy timeout to 30s
-                     PRAGMA synchronous = NORMAL; -- Faster sync",
+                     PRAGMA synchronous = NORMAL; -- Faster sync
+                     CREATE TABLE IF NOT EXISTS prices (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         crypto_name TEXT NOT NULL,
+                         price REAL NOT NULL,
+                         timestamp INTEGER NOT NULL,
+                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                     );
+                     CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp ON prices(crypto_name, timestamp);",
             )
         });
 
