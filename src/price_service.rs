@@ -74,7 +74,7 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
         {
             Ok(response) => {
                 if !response.status().is_success() {
-                    println!("❌ HTTP request failed (attempt {}): {}", attempt, response.status());
+                    error!("HTTP request failed (attempt {}): {}", attempt, response.status());
                     if attempt < MAX_RETRIES {
                         tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
                         continue;
@@ -101,7 +101,7 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
                         return Err("Failed to parse price data".into());
                     }
                     Err(e) => {
-                        println!("❌ JSON parsing failed (attempt {}): {}", attempt, e);
+                        error!("JSON parsing failed (attempt {}): {}", attempt, e);
                         if attempt < MAX_RETRIES {
                             tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
                             continue;
@@ -111,7 +111,7 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
                 }
             }
             Err(e) => {
-                println!("❌ Network request failed (attempt {}): {}", attempt, e);
+                error!("Network request failed (attempt {}): {}", attempt, e);
                 if attempt < MAX_RETRIES {
                     tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
                     continue;
@@ -176,7 +176,7 @@ async fn fetch_yahoo_price(ticker: &str) -> Result<PriceData, Box<dyn std::error
         {
             Ok(response) => {
                 if !response.status().is_success() {
-                    println!("❌ Yahoo API request failed for {} (attempt {}): {}", ticker, attempt, response.status());
+                    error!("Yahoo API request failed for {} (attempt {}): {}", ticker, attempt, response.status());
                     if attempt < MAX_RETRIES {
                         tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
                         continue;
@@ -209,13 +209,13 @@ async fn fetch_yahoo_price(ticker: &str) -> Result<PriceData, Box<dyn std::error
                         return Err("Failed to parse Yahoo JSON structure".into());
                     }
                     Err(e) => {
-                         println!("❌ Yahoo JSON parsing failed: {}", e);
+                         error!("Yahoo JSON parsing failed: {}", e);
                          return Err(e.into());
                     }
                 }
             }
             Err(e) => {
-                println!("❌ Yahoo Network request failed: {}", e);
+                error!("Yahoo Network request failed: {}", e);
                 if attempt < MAX_RETRIES {
                     tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
                     continue;
@@ -241,10 +241,10 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                     premium_percent: None,
                     source: None
                 });
-                println!("✅ Fetched {} price: ${:.6}", crypto, price);
+                info!("Fetched {} price: ${:.6}", crypto, price);
             }
             Err(e) => {
-                println!("❌ Failed to fetch {} price: {}", crypto, e);
+                error!("Failed to fetch {} price: {}", crypto, e);
                 // Use previous price or default
                 let default_price = match crypto.as_str() {
                     "BTC" => 45000.0,
@@ -282,10 +282,10 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
         match fetch_yahoo_price("DX-Y.NYB").await {
             Ok(data) => {
                 prices.insert("DXY".to_string(), data.clone());
-                 println!("✅ Fetched DXY price: ${:.2}", data.price);
+                 info!("Fetched DXY price: ${:.2}", data.price);
             }
             Err(e) => {
-                 println!("❌ Failed to fetch DXY price: {}", e);
+                 error!("Failed to fetch DXY price: {}", e);
             }
         }
     }
@@ -309,7 +309,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
 async fn write_prices_to_file(prices: &PricesFile, file_path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let json_string = serde_json::to_string_pretty(prices)?;
     fs::write(file_path, json_string)?;
-    println!("📝 Wrote prices to {}", file_path);
+    info!("Wrote prices to {}", file_path);
     Ok(())
 }
 
