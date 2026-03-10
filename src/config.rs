@@ -22,7 +22,7 @@ impl BotConfig {
         let crypto_name = std::env::var("CRYPTO_NAME").unwrap_or_else(|_| "SOL".to_string());
 
         let update_interval_secs = std::env::var("UPDATE_INTERVAL_SECONDS")
-            .unwrap_or_else(|_| "300".to_string())
+            .unwrap_or_else(|_| UPDATE_INTERVAL_SECONDS.to_string())
             .parse::<u64>()
             .map_err(|_| BotError::Parse("Invalid UPDATE_INTERVAL_SECONDS".into()))?;
 
@@ -69,6 +69,9 @@ impl BotConfig {
 
 /// Constants for the application
 pub const DATABASE_PATH: &str = "shared/prices.db";
+
+/// Default update interval in seconds
+pub const UPDATE_INTERVAL_SECONDS: u64 = 12;
 
 /// Price history retention in days
 pub const PRICE_HISTORY_DAYS: u64 = 365; // Keep 1 year of history

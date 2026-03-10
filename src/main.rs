@@ -10,6 +10,8 @@ mod price_service;
 mod db_cleanup;
 mod charting;
 mod shanghai_price_service;
+#[cfg(test)]
+mod database_tests;
 
 use errors::BotResult;
 use config::BotConfig;

@@ -55,7 +55,7 @@ Each bot is independent - add more by adding tokens to .env.
    ```
    CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,...
    ```
-   Get feed IDs from https://pyth.network/docs/developers
+   Get feed IDs from https://insights.pyth.network/price-feeds?search=btc
 
 ## Running
 
@@ -82,6 +82,10 @@ docker-compose down
 
 ### Health Check
 The health endpoint is available at localhost:8080/health
+
+```
+curl http://localhost:8080/health
+```
 
 ## Configuration
 
@@ -118,6 +122,8 @@ The bot will automatically spawn new instances for each token.
 
 ## Tech Stack
 
+- Docker with Docker Compose
+- Debian (Docker base image)
 - Rust (edition 2021)
 - Serenity (Discord bot library)
 - SQLite (database)

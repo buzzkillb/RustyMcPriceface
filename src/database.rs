@@ -56,6 +56,15 @@ impl PriceDatabase {
 
     /// Save a price record to the database
     pub fn save_price(&self, crypto_name: &str, price: f64) -> BotResult<()> {
+        // Skip invalid prices (0 or negative)
+        if price <= 0.0 {
+            debug!(
+                "Skipping save for {} - invalid price: {}",
+                crypto_name, price
+            );
+            return Ok(());
+        }
+
         let conn = self.get_connection()?;
         let current_time = get_current_timestamp()?;
 

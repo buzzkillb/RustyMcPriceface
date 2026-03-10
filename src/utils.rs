@@ -111,3 +111,70 @@ pub fn get_change_arrow(change_percent: f64) -> &'static str {
         "➡️"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_crypto_name_valid() {
+        assert!(validate_crypto_name("BTC").is_ok());
+        assert!(validate_crypto_name("SOL").is_ok());
+        assert!(validate_crypto_name("ETH").is_ok());
+        assert!(validate_crypto_name("1234567890").is_ok()); // 10 chars
+    }
+
+    #[test]
+    fn test_validate_crypto_name_invalid() {
+        assert!(validate_crypto_name("").is_err());
+        assert!(validate_crypto_name("12345678901").is_err()); // 11 chars
+        assert!(validate_crypto_name("BTC!").is_err());
+        assert!(validate_crypto_name("BTC-USDT").is_err());
+    }
+
+    #[test]
+    fn test_validate_price_valid() {
+        assert!(validate_price(100.0).is_ok());
+        assert!(validate_price(0.01).is_ok());
+        assert!(validate_price(1000000.0).is_ok());
+    }
+
+    #[test]
+    fn test_validate_price_invalid() {
+        assert!(validate_price(0.0).is_err());
+        assert!(validate_price(-10.0).is_err());
+        assert!(validate_price(f64::NAN).is_err());
+        assert!(validate_price(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_format_price() {
+        assert_eq!(format_price(50000.0), "$50000");
+        assert_eq!(format_price(500.0), "$500.00");
+        assert_eq!(format_price(5.0), "$5.000");
+        assert_eq!(format_price(0.5), "$0.5000");
+    }
+
+    #[test]
+    fn test_calculate_percentage_change() {
+        assert!((calculate_percentage_change(110.0, 100.0).unwrap() - 10.0).abs() < 0.01);
+        assert!((calculate_percentage_change(90.0, 100.0).unwrap() - (-10.0)).abs() < 0.01);
+        assert!(calculate_percentage_change(100.0, 0.0).is_err()); // divide by zero
+    }
+
+    #[test]
+    fn test_get_change_arrow() {
+        assert_eq!(get_change_arrow(5.0), "📈");
+        assert_eq!(get_change_arrow(-5.0), "📉");
+        assert_eq!(get_change_arrow(0.0), "➡️");
+    }
+
+    #[test]
+    fn test_get_crypto_emoji() {
+        assert_eq!(get_crypto_emoji("BTC"), "🪙");
+        assert_eq!(get_crypto_emoji("ETH"), "🪙");
+        assert_eq!(get_crypto_emoji("DOGE"), "🐕");
+        assert_eq!(get_crypto_emoji("DXY"), "🇺🇸");
+        assert_eq!(get_crypto_emoji("UNKNOWN"), "🪙");
+    }
+}
