@@ -11,6 +11,7 @@ const MAX_RETRIES: u32 = 3;
 const RATE_LIMIT_DELAY_MS: u64 = 2000; // 2 seconds between Discord API calls
 
 /// Discord API wrapper with rate limiting and error handling
+#[derive(Clone)]
 pub struct DiscordApi {
     http: Arc<Http>,
 }
@@ -105,18 +106,27 @@ impl DiscordApi {
         }
     }
 
-    /// Update nicknames in multiple guilds
+    /// Update nicknames in multiple guilds in parallel
     pub async fn update_nicknames_in_guilds(&self, guilds: &[GuildId], nickname: &str) -> Vec<BotResult<()>> {
-        let mut results = Vec::new();
+        use futures::stream::StreamExt;
+        use std::sync::Arc;
         
-        for (index, guild_id) in guilds.iter().enumerate() {
-            let result = self.update_nickname(*guild_id, nickname).await;
-            
-            match &result {
-                Ok(_) => debug!("Updated nickname in guild {} ({}/{})", guild_id, index + 1, guilds.len()),
-                Err(_) => {} // Error already logged in update_nickname
+        let nickname = nickname.to_string();
+        let self_arc = Arc::new(self.clone());
+        
+        let futures: Vec<_> = guilds.iter().map(|guild_id| {
+            let api = self_arc.clone();
+            let nickname = nickname.clone();
+            let guild_id = *guild_id;
+            async move {
+                api.update_nickname(guild_id, &nickname).await
             }
-            
+        }).collect();
+        
+        let mut results = Vec::new();
+        let mut stream = futures::stream::iter(futures).buffer_unordered(3);
+        
+        while let Some(result) = stream.next().await {
             results.push(result);
         }
         
