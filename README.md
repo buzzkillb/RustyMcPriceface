@@ -2,6 +2,34 @@
 
 Discord bot that tracks cryptocurrency and asset prices using Pyth Network and posts updates to Discord channels.
 
+## Architecture
+
+```
+                    Pyth Network
+                          |
+                    Price Service
+                          |
+                    shared/prices.json
+                          |
+         +----------------+----------------+
+         |                |                |
+      Bot BTC         Bot ETH         Bot SOL
+      (token)         (token)         (token)
+         |                |                |
+    +----+----+     +----+----+     +----+----+
+    |         |     |         |     |         |
+ Discord   SQLite  Discord   SQLite  Discord   SQLite
+```
+
+## How It Works
+
+1. Price Service fetches prices from Pyth Network every 30 seconds
+2. Prices are written to shared JSON file and SQLite database
+3. Each bot instance reads prices and updates its Discord nickname
+4. Multiple bot instances run in parallel, one per token
+
+Each bot is independent - add more by adding tokens to .env.
+
 ## Prerequisites
 
 - Docker and Docker Compose
