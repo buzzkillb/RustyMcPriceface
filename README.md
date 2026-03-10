@@ -55,7 +55,7 @@ Each bot is independent - add more by adding tokens to .env.
    ```
    CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,...
    ```
-   Get feed IDs from https://pyth.network/docs/developers
+   Get feed IDs from https://insights.pyth.network/price-feeds?search=btc
 
 ## Running
 
