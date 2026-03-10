@@ -25,8 +25,7 @@ docs/
 shared/
 
 # Docker
-Dockerfile*
-docker-compose*.yml
+# Dockerfile and docker-compose are needed for building!
 
 # Scripts
 *.sh
