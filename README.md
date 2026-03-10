@@ -85,6 +85,7 @@ The bot will automatically spawn new instances for each token.
 - `!BTC` - Get BTC price
 - `!ETH` - Get ETH price
 - `/price` - Slash command for prices
+- `!silverchart` - Get silver price chart
 - `!status` - Check system status (BTC bot only)
 
 ## Tech Stack
