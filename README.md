@@ -122,6 +122,8 @@ The bot will automatically spawn new instances for each token.
 
 ## Tech Stack
 
+- Docker with Docker Compose
+- Debian (Docker base image)
 - Rust (edition 2021)
 - Serenity (Discord bot library)
 - SQLite (database)
