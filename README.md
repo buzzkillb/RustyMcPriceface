@@ -83,6 +83,10 @@ docker-compose down
 ### Health Check
 The health endpoint is available at localhost:8080/health
 
+```
+curl http://localhost:8080/health
+```
+
 ## Configuration
 
 ### Update Interval
