@@ -132,8 +132,6 @@ pub async fn fetch_shanghai_history(range: &str, symbol: Option<&str>) -> Result
         if symbol_param.is_empty() { "".to_string() } else { format!("&symbol={}", symbol_param) }
     );
     
-    // println!("Fetching history from: {}", url); // Debug
-
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -450,18 +448,15 @@ pub async fn run(database: Arc<PriceDatabase>) -> Result<(), Box<dyn std::error:
                 
                 // Store in JSON file (for backward compatibility)
                 if let Err(e) = write_prices_to_file(&prices, &file_path).await {
-                    error!("❌ Failed to write prices to JSON: {}", e);
-                } else {
-                    // info!("📝 Successfully wrote prices to JSON file"); // Verbose
+                    error!("Failed to write prices to JSON: {}", e);
                 }
                 
                 // Store in SQLite database using shared pool
                 for (crypto, price_data) in &prices.prices {
                     if let Err(e) = database.save_price(crypto, price_data.price) {
-                        error!("❌ Failed to store {} price in database: {}", crypto, e);
+                        error!("Failed to store {} price in database: {}", crypto, e);
                     }
                 }
-                // info!("💾 Stored prices in database"); // Verbose
             }
             Err(e) => {
                 consecutive_failures += 1;
