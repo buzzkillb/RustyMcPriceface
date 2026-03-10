@@ -25,7 +25,7 @@ docs/
 shared/
 
 # Docker
-# Dockerfile and docker-compose are needed for building!
+# (Dockerfile and docker-compose are needed for build)
 
 # Scripts
 *.sh
