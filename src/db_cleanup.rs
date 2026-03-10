@@ -274,7 +274,7 @@ impl DatabaseCleanup {
 
         info!(" {} raw price records   ✅ Successfully deleted older than {} seconds", total_deleted, older_than_seconds);
 
-        Ok(deleted as u64)
+        Ok(total_deleted as u64)
     }
 
     /// Delete old aggregated data beyond retention period

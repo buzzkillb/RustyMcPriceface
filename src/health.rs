@@ -117,7 +117,7 @@ impl HealthState {
         let discord_test_failures = self.discord_test_failures.load(Ordering::Relaxed);
 
         // For newly started bots, use start_time as baseline (value of 0 means never updated)
-        let effective_start = if start_time > 0 { start_time } else { now };
+        let _effective_start = if start_time > 0 { start_time } else { now };
 
         // Consider unhealthy if:
         // - No price update in last 5 minutes
@@ -196,20 +196,26 @@ impl HealthAggregator {
     }
 
     pub fn add_bot(&self, health: Arc<HealthState>) {
-        let mut bots = self.bots.lock().unwrap();
-        bots.push(health);
+        if let Ok(mut bots) = self.bots.lock() {
+            bots.push(health);
+        }
     }
 
     pub fn is_healthy(&self) -> bool {
-        let bots = self.bots.lock().unwrap();
-        if bots.is_empty() {
-            return true;
+        if let Ok(bots) = self.bots.lock() {
+            if bots.is_empty() {
+                return true;
+            }
+            return bots.iter().any(|b| b.is_healthy());
         }
-        bots.iter().any(|b| b.is_healthy())
+        false
     }
 
     pub fn to_json(&self) -> serde_json::Value {
-        let bots = self.bots.lock().unwrap();
+        let bots = match self.bots.lock() {
+            Ok(bots) => bots,
+            Err(_) => return json!({"error": "lock poisoned"}),
+        };
         let bots_json: Vec<serde_json::Value> = bots.iter().map(|b| b.to_json()).collect();
 
         let any_healthy = bots.iter().any(|b| b.is_healthy());
