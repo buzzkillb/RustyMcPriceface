@@ -244,22 +244,35 @@ impl DatabaseCleanup {
             return Ok(0);
         }
         
-        info!("   🗑️ Starting deletion of {} old raw records (this may take a while)...", count);
+        info!("   🗑️ Deleting old raw records in batches...");
         
-        // Only delete raw data that has been successfully aggregated
-        let deleted = conn.execute(
-            "DELETE FROM prices 
-             WHERE timestamp < ? 
-             AND EXISTS (
-                 SELECT 1 FROM price_aggregates pa 
-                 WHERE pa.crypto_name = prices.crypto_name 
-                 AND pa.bucket_start <= prices.timestamp 
-                 AND pa.bucket_start + pa.bucket_duration > prices.timestamp
-             )",
-            [cutoff_time as i64],
-        )?;
+        // Delete in batches to avoid hanging
+        let mut total_deleted = 0i64;
+        let batch_size = 10000;
+        
+        loop {
+            let deleted = conn.execute(
+                "DELETE FROM prices 
+                 WHERE timestamp < ? 
+                 AND EXISTS (
+                     SELECT 1 FROM price_aggregates pa 
+                     WHERE pa.crypto_name = prices.crypto_name 
+                     AND pa.bucket_start <= prices.timestamp 
+                     AND pa.bucket_start + pa.bucket_duration > prices.timestamp
+                 )
+                 LIMIT ?",
+                rusqlite::params![cutoff_time as i64, batch_size],
+            )?;
+            
+            if deleted == 0 {
+                break;
+            }
+            
+            total_deleted += deleted as i64;
+            info!("   Deleted {} records (total: {})", deleted, total_deleted);
+        }
 
-        info!("   ✅ Successfully deleted {} raw price records older than {} seconds", deleted, older_than_seconds);
+        info!(" {} raw price records   ✅ Successfully deleted older than {} seconds", total_deleted, older_than_seconds);
 
         Ok(deleted as u64)
     }
