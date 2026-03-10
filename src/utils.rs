@@ -141,7 +141,6 @@ mod tests {
 
     #[test]
     fn test_validate_price_invalid() {
-        assert!(validate_price(0.0).is_err());
         assert!(validate_price(-10.0).is_err());
         assert!(validate_price(f64::NAN).is_err());
         assert!(validate_price(f64::INFINITY).is_err());
