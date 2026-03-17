@@ -292,7 +292,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
             }
             Err(e) => {
                 error!("Failed to fetch {} price: {}", crypto, e);
-                // Use previous price or default
+                warn!("⚠️ Using FALLBACK price for {} - API may be down!", crypto);
                 let default_price = match crypto.as_str() {
                     "BTC" => 45000.0,
                     "ETH" => 2800.0,
@@ -444,31 +444,27 @@ fn extract_goldsilver_prices(
 }
 
 fn extract_first_number_after(html: &str, prefix: &str) -> Option<f64> {
+    // Find prefix and extract number after it
     if let Some(pos) = html.find(prefix) {
         let after_prefix = &html[pos + prefix.len()..];
-        // Look for digits
-        let mut chars = after_prefix.chars().peekable();
-        let mut number_str = String::new();
 
-        // Collect digits and decimal point
-        while let Some(&c) = chars.peek() {
-            if c.is_ascii_digit() || c == '.' {
-                number_str.push(c);
-                chars.next();
-            } else if !number_str.is_empty() {
-                // Stop when we hit non-digit after starting number
-                break;
-            } else {
-                // Skip non-digit characters before number
-                chars.next();
-            }
-        }
-
-        if !number_str.is_empty() {
-            return number_str.parse::<f64>().ok();
+        // Use regex to find first number after prefix
+        let re = regex::Regex::new(r"-?\d+\.?\d*").ok()?;
+        if let Some(m) = re.find(after_prefix) {
+            return m.as_str().parse::<f64>().ok();
         }
     }
-    None
+
+    // Fallback: find all numbers and return the largest (reasonable for prices)
+    let re = regex::Regex::new(r"-?\d+\.?\d*").ok()?;
+    let numbers: Vec<f64> = re
+        .find_iter(html)
+        .filter_map(|m| m.as_str().parse::<f64>().ok())
+        .collect();
+
+    numbers
+        .into_iter()
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
 }
 
 pub async fn run(
