@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::PriceDatabase;
+    use crate::PriceDatabase;
     use tempfile::TempDir;
 
     fn setup_temp_db() -> (TempDir, PriceDatabase) {
