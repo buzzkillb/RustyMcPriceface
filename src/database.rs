@@ -33,7 +33,22 @@ impl PriceDatabase {
                          timestamp INTEGER NOT NULL,
                          created_at TEXT DEFAULT CURRENT_TIMESTAMP
                      );
-                     CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp ON prices(crypto_name, timestamp);",
+                     CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp ON prices(crypto_name, timestamp);
+                     CREATE TABLE IF NOT EXISTS price_aggregates (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         crypto_name TEXT NOT NULL,
+                         bucket_start INTEGER NOT NULL,
+                         bucket_duration INTEGER NOT NULL,
+                         open_price REAL NOT NULL,
+                         high_price REAL NOT NULL,
+                         low_price REAL NOT NULL,
+                         close_price REAL NOT NULL,
+                         avg_price REAL NOT NULL,
+                         sample_count INTEGER NOT NULL,
+                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                     );
+                     CREATE INDEX IF NOT EXISTS idx_aggregates_crypto_bucket 
+                         ON price_aggregates(crypto_name, bucket_start, bucket_duration);",
             )
         });
 
