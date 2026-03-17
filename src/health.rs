@@ -107,7 +107,7 @@ impl HealthState {
             .unwrap_or_default()
             .as_secs();
 
-        let start_time = self.start_time.load(Ordering::Relaxed);
+        let _start_time = self.start_time.load(Ordering::Relaxed);
         let last_price = self.last_price_update.load(Ordering::Relaxed);
         let last_db = self.last_db_write.load(Ordering::Relaxed);
         let last_discord = self.last_discord_update.load(Ordering::Relaxed);
@@ -115,9 +115,6 @@ impl HealthState {
         let failures = self.consecutive_failures.load(Ordering::Relaxed);
         let gateway_failures = self.gateway_failures.load(Ordering::Relaxed);
         let discord_test_failures = self.discord_test_failures.load(Ordering::Relaxed);
-
-        // For newly started bots, use start_time as baseline (value of 0 means never updated)
-        let _effective_start = if start_time > 0 { start_time } else { now };
 
         // Consider unhealthy if:
         // - No price update in last 5 minutes
