@@ -52,8 +52,9 @@ async fn main() -> BotResult<()> {
     // Start Database Cleanup Service
     info!("🧹 Starting Database Cleanup Service...");
     {
+        let db_clone = db.clone();
         tokio::spawn(async move {
-            let cleanup = DatabaseCleanup::new();
+            let cleanup = DatabaseCleanup::new(db_clone);
             if let Err(e) = cleanup.run().await {
                 error!("Cleanup service crashed: {}", e);
             }
