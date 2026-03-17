@@ -539,8 +539,22 @@ impl EventHandler for Bot {
                 }
                 "status" => {
                     debug!("Handling /status command");
-                    // Only BTC bot responds to status
-                    if self.config.crypto_name == "BTC" {
+
+                    // Check if user has admin permissions
+                    let has_permission = command_interaction
+                        .member
+                        .as_ref()
+                        .map(|m| m.permissions.map(|p| p.administrator()).unwrap_or(false))
+                        .unwrap_or(false);
+
+                    if !has_permission {
+                        let data = CreateInteractionResponseMessage::new()
+                            .content("❌ This command is restricted to server administrators.");
+                        let builder = CreateInteractionResponse::Message(data);
+                        command_interaction
+                            .create_response(&ctx.http, builder)
+                            .await
+                    } else if self.config.crypto_name == "BTC" {
                         let status = self.health_aggregator.to_json();
                         let total_bots = status
                             .get("total_bots")
@@ -599,16 +613,17 @@ impl EventHandler for Bot {
                         lines.push("```".to_string());
 
                         let message = lines.join("\n");
-                        let _ = command_interaction
+                        command_interaction
                             .create_response(
                                 &ctx.http,
                                 CreateInteractionResponse::Message(
                                     CreateInteractionResponseMessage::new().content(message),
                                 ),
                             )
-                            .await;
+                            .await
+                    } else {
+                        Ok(()) as Result<(), serenity::Error>
                     }
-                    Ok(())
                 }
                 _ => {
                     warn!("Unknown command: {}", command_interaction.data.name);

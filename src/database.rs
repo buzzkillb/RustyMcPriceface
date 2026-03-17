@@ -323,8 +323,6 @@ impl PriceDatabase {
 
     /// Get price history for charting (up to specified days)
     /// Returns vector of (timestamp, price) tuples
-    /// Get price history for charting (up to specified days)
-    /// Returns vector of (timestamp, price) tuples
     pub fn get_price_history(&self, crypto_name: &str, days: u64) -> BotResult<Vec<(i64, f64)>> {
         let conn = self.get_connection()?;
         let current_time = get_current_timestamp()?;

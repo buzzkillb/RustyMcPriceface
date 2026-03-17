@@ -68,7 +68,7 @@ impl BotConfig {
 }
 
 /// Constants for the application
-pub const DATABASE_PATH: &str = "shared/prices.db";
+pub const DATABASE_PATH: &str = "/app/shared/prices.db";
 
 /// Default update interval in seconds
 pub const UPDATE_INTERVAL_SECONDS: u64 = 12;
