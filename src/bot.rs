@@ -2,23 +2,21 @@ use crate::config::BotConfig;
 use crate::database::PriceDatabase;
 use crate::discord_api::DiscordApi;
 use crate::errors::{BotError, BotResult};
-use crate::health::{HealthState, HealthAggregator};
+use crate::health::{HealthAggregator, HealthState};
 
-use crate::price_service::PricesFile;
-use crate::utils::{
-    format_price, get_current_timestamp, validate_crypto_name, validate_price,
-};
-use crate::charting::{generate_shanghai_chart, generate_price_chart};
+use crate::charting::{generate_price_chart, generate_shanghai_chart};
 use crate::price_service::fetch_shanghai_history;
+use crate::price_service::PricesFile;
+use crate::utils::{format_price, get_current_timestamp, validate_crypto_name, validate_price};
 use serenity::{
     all::{
-        ActivityData, Command, CommandDataOptionValue, CommandOptionType, CreateCommand,
-        CreateCommandOption, GatewayIntents, CreateAttachment,
+        ActivityData, Command, CommandDataOptionValue, CommandOptionType, CreateAttachment,
+        CreateCommand, CreateCommandOption, GatewayIntents,
     },
     async_trait,
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
     http::Http,
-    model::{application::CommandInteraction, gateway::Ready, channel::Message},
+    model::{application::CommandInteraction, channel::Message, gateway::Ready},
     prelude::*,
     Client,
 };
@@ -56,7 +54,12 @@ pub struct Bot {
 
 impl Bot {
     /// Create a new bot instance with configuration, shared database, and health state
-    pub fn new(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>, health_aggregator: Arc<HealthAggregator>) -> BotResult<Self> {
+    pub fn new(
+        config: BotConfig,
+        database: Arc<PriceDatabase>,
+        health: Arc<HealthState>,
+        health_aggregator: Arc<HealthAggregator>,
+    ) -> BotResult<Self> {
         Ok(Self {
             config,
             health,
@@ -68,7 +71,7 @@ impl Bot {
     /// Register slash commands with Discord
     async fn register_commands(&self, http: &Http) -> BotResult<()> {
         info!("Registering slash commands...");
-        
+
         let current_crypto = &self.config.crypto_name;
         let price_command = CreateCommand::new("price")
             .description(format!(
@@ -87,8 +90,8 @@ impl Bot {
         let chart_command = CreateCommand::new("silverchart")
             .description("Get a 1-year historical chart for the current crypto");
 
-        let status_command = CreateCommand::new("status")
-            .description("Get bot system status (BTC bot only)");
+        let status_command =
+            CreateCommand::new("status").description("Get bot system status (BTC bot only)");
 
         info!("Creating global command...");
 
@@ -98,7 +101,9 @@ impl Bot {
 
         Command::create_global_command(http, chart_command)
             .await
-            .map_err(|e| BotError::Discord(format!("Failed to register /silverchart command: {}", e)))?;
+            .map_err(|e| {
+                BotError::Discord(format!("Failed to register /silverchart command: {}", e))
+            })?;
 
         Command::create_global_command(http, status_command)
             .await
@@ -147,17 +152,25 @@ impl Bot {
         Ok(response)
     }
 
-    async fn handle_chart_command(&self, interaction: &CommandInteraction, ctx: &Context) -> BotResult<()> {
+    async fn handle_chart_command(
+        &self,
+        interaction: &CommandInteraction,
+        ctx: &Context,
+    ) -> BotResult<()> {
         // Defer response as charting might take a moment
-        interaction.defer(&ctx.http).await
+        interaction
+            .defer(&ctx.http)
+            .await
             .map_err(|e| BotError::Discord(format!("Failed to defer interaction: {}", e)))?;
 
         // silverchart command always uses SILVER
         let crypto_name = "SILVER";
-        
+
         // SILVER uses database history, GOLD uses Shanghai API
         if crypto_name == "SILVER" || crypto_name == "XAG" {
-            let history = self.database.get_price_history(crypto_name, 30)
+            let history = self
+                .database
+                .get_price_history(crypto_name, 30)
                 .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
 
             if history.is_empty() {
@@ -166,13 +179,18 @@ impl Bot {
                 return Ok(());
             }
 
-            let image_data = generate_price_chart(&history, crypto_name).map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
+            let image_data = generate_price_chart(&history, crypto_name)
+                .map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
             let attachment = CreateAttachment::bytes(image_data, "chart.png");
-            interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new()
-                .content(format!("📊 30-Day Chart for {}", crypto_name))
-                .new_attachment(attachment)
-            ).await
-            .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
+            interaction
+                .edit_response(
+                    &ctx.http,
+                    serenity::builder::EditInteractionResponse::new()
+                        .content(format!("📊 30-Day Chart for {}", crypto_name))
+                        .new_attachment(attachment),
+                )
+                .await
+                .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
             return Ok(());
         }
 
@@ -182,25 +200,37 @@ impl Bot {
             _ => None,
         };
 
-        let history = fetch_shanghai_history("1Y", api_symbol).await
+        let history = fetch_shanghai_history("1Y", api_symbol)
+            .await
             .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
 
         if history.is_empty() {
-             interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new().content("❌ No historical data available")).await
+            interaction
+                .edit_response(
+                    &ctx.http,
+                    serenity::builder::EditInteractionResponse::new()
+                        .content("❌ No historical data available"),
+                )
+                .await
                 .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
-             return Ok(());
+            return Ok(());
         }
 
         // Generate Chart
-        let image_data = generate_shanghai_chart(&history, crypto_name).map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
+        let image_data = generate_shanghai_chart(&history, crypto_name)
+            .map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
 
         // Send Response
         let attachment = CreateAttachment::bytes(image_data, "chart.png");
-        interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new()
-            .content(format!("📊 1-Year Chart for {}", crypto_name))
-            .new_attachment(attachment)
-        ).await
-        .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
+        interaction
+            .edit_response(
+                &ctx.http,
+                serenity::builder::EditInteractionResponse::new()
+                    .content(format!("📊 1-Year Chart for {}", crypto_name))
+                    .new_attachment(attachment),
+            )
+            .await
+            .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
 
         Ok(())
     }
@@ -221,21 +251,29 @@ impl Bot {
                 match generate_price_chart(&history, crypto_name) {
                     Ok(image_data) => {
                         let attachment = CreateAttachment::bytes(image_data, "chart.png");
-                        let _ = channel_id.send_message(&ctx.http, serenity::builder::CreateMessage::new()
-                            .content(title)
-                            .add_file(attachment)
-                        ).await;
+                        let _ = channel_id
+                            .send_message(
+                                &ctx.http,
+                                serenity::builder::CreateMessage::new()
+                                    .content(title)
+                                    .add_file(attachment),
+                            )
+                            .await;
                         self.health.update_discord_timestamp();
-                    },
+                    }
                     Err(e) => {
                         error!("Failed to generate chart: {}", e);
-                        let _ = channel_id.say(&ctx.http, format!("❌ Failed to generate chart: {}", e)).await;
+                        let _ = channel_id
+                            .say(&ctx.http, format!("❌ Failed to generate chart: {}", e))
+                            .await;
                     }
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to fetch history: {}", e);
-                let _ = channel_id.say(&ctx.http, format!("❌ Failed to fetch history: {}", e)).await;
+                let _ = channel_id
+                    .say(&ctx.http, format!("❌ Failed to fetch history: {}", e))
+                    .await;
             }
         }
         Ok(())
@@ -263,38 +301,42 @@ impl Bot {
             });
 
         // Build the main response
-        let mut response = format!(
-            "{}: {} {}",
-            crypto_name, formatted_price, change_info
-        );
+        let mut response = format!("{}: {} {}", crypto_name, formatted_price, change_info);
 
         // Add prices in terms of BTC, ETH, and SOL (excluding the crypto's own price)
         let mut conversion_prices = Vec::new();
 
         if crypto_name != "BTC" {
             if let Some(btc_price) = all_prices.get("BTC") {
-                let btc_conversion = current_price / btc_price;
-                conversion_prices.push(format!("{:.8} BTC", btc_conversion));
+                if *btc_price > 0.0 {
+                    let btc_conversion = current_price / btc_price;
+                    conversion_prices.push(format!("{:.8} BTC", btc_conversion));
+                }
             }
         }
 
         if crypto_name != "ETH" {
             if let Some(eth_price) = all_prices.get("ETH") {
-                let eth_conversion = current_price / eth_price;
-                conversion_prices.push(format!("{:.6} ETH", eth_conversion));
+                if *eth_price > 0.0 {
+                    let eth_conversion = current_price / eth_price;
+                    conversion_prices.push(format!("{:.6} ETH", eth_conversion));
+                }
             }
         }
 
         if crypto_name != "SOL" {
             if let Some(sol_price) = all_prices.get("SOL") {
-                let sol_conversion = current_price / sol_price;
-                conversion_prices.push(format!("{:.4} SOL", sol_conversion));
+                if *sol_price > 0.0 {
+                    let sol_conversion = current_price / sol_price;
+                    conversion_prices.push(format!("{:.4} SOL", sol_conversion));
+                }
             }
         }
 
         // Add Gold/Silver ratio if this is Silver
         if crypto_name == "SILVER" || crypto_name == "XAG" {
-            let gold_price = all_prices.get("GOLD")
+            let gold_price = all_prices
+                .get("GOLD")
                 .or_else(|| all_prices.get("XAU"))
                 .or_else(|| all_prices.get("PAXG"));
 
@@ -318,26 +360,27 @@ impl Bot {
             } else {
                 (0.0, 0.0) // For SHANGHAI, we'd need premium data from elsewhere
             };
-            
+
             response.push_str(&format!(
-                 "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
-                 premium, premium_percent
+                "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
+                premium, premium_percent
             ));
         }
 
         // Add conversion prices to response if available
         if !conversion_prices.is_empty() {
-            response.push_str(&format!(
-                "\n💱 Also: {}",
-                conversion_prices.join(" | ")
-            ));
+            response.push_str(&format!("\n💱 Also: {}", conversion_prices.join(" | ")));
         }
 
         Ok(response)
     }
 
     /// Handle price command for message-based commands (like !btc, !sol)
-    async fn handle_price_command_for_message(&self, channel_id: &serenity::model::id::ChannelId, ctx: &Context) -> BotResult<()> {
+    async fn handle_price_command_for_message(
+        &self,
+        channel_id: &serenity::model::id::ChannelId,
+        ctx: &Context,
+    ) -> BotResult<()> {
         let crypto_name = self.config.crypto_name.clone();
 
         debug!("Message price command called for: {}", crypto_name);
@@ -353,7 +396,9 @@ impl Bot {
         let response = self.build_price_response(&crypto_name, current_price, &all_prices)?;
 
         // Send the response to the channel
-        channel_id.say(&ctx.http, response).await
+        channel_id
+            .say(&ctx.http, response)
+            .await
             .map_err(|e| BotError::Discord(format!("Failed to send message: {}", e)))?;
 
         Ok(())
@@ -361,9 +406,15 @@ impl Bot {
 }
 
 /// Helper to start a bot instance (used by main.rs)
-pub async fn start_bot(config: BotConfig, database: Arc<PriceDatabase>, health: Arc<HealthState>, health_aggregator: Arc<HealthAggregator>) -> BotResult<()> {
+pub async fn start_bot(
+    config: BotConfig,
+    database: Arc<PriceDatabase>,
+    health: Arc<HealthState>,
+    health_aggregator: Arc<HealthAggregator>,
+) -> BotResult<()> {
     let token = config.discord_token.clone();
-    let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
+    let intents =
+        GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
     let bot = Bot::new(config, database, health, health_aggregator)?;
 
@@ -385,7 +436,7 @@ impl EventHandler for Bot {
         info!("Bot is ready! Logged in as: {}", ready.user.name);
         info!("Bot ID: {}", ready.user.id);
         info!("Connected to {} guilds", ready.guilds.len());
-        
+
         // Update Discord timestamp to indicate successful connection
         self.health.update_discord_timestamp();
 
@@ -416,14 +467,13 @@ impl EventHandler for Bot {
         let ctx_arc = Arc::new(ctx);
 
         // Run the price update loop in a separate task so ready() returns
-        // Run the price update loop in a separate task so ready() returns
         // Cloning Bot is expensive if it has deep state, but here it's Config + Health (Arc-like internals) + Arc<DB>
         // Use a wrapper or simply spawn the loop with cloned components
-        
+
         let config = self.config.clone();
         let health = self.health.clone();
         let database = self.database.clone();
-        
+
         tokio::spawn(async move {
             price_update_loop(http, ctx_arc, config, health, database).await;
         });
@@ -474,10 +524,16 @@ impl EventHandler for Bot {
                 "silverchart" => {
                     debug!("Handling /silverchart command");
                     if let Err(e) = self.handle_chart_command(&command_interaction, &ctx).await {
-                         error!("Chart command failed: {}", e);
-                         let _ = command_interaction.create_response(&ctx.http, 
-                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(format!("❌ Error: {}", e)))
-                         ).await;
+                        error!("Chart command failed: {}", e);
+                        let _ = command_interaction
+                            .create_response(
+                                &ctx.http,
+                                CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content(format!("❌ Error: {}", e)),
+                                ),
+                            )
+                            .await;
                     }
                     Ok(()) // Response handled inside function
                 }
@@ -486,44 +542,71 @@ impl EventHandler for Bot {
                     // Only BTC bot responds to status
                     if self.config.crypto_name == "BTC" {
                         let status = self.health_aggregator.to_json();
-                        let total_bots = status.get("total_bots").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let healthy_bots = status.get("healthy_bots").and_then(|v| v.as_u64()).unwrap_or(0);
-                        
+                        let total_bots = status
+                            .get("total_bots")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let healthy_bots = status
+                            .get("healthy_bots")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
                         let mut lines = vec![
                             "```".to_string(),
-                            format!("{:14} {:>6} {:>8} {:>6} {:>6}", "Bot", "Status", "Uptime", "Fails", "GW"),
-                            "----------------------------------------------------------------".to_string(),
+                            format!(
+                                "{:14} {:>6} {:>8} {:>6} {:>6}",
+                                "Bot", "Status", "Uptime", "Fails", "GW"
+                            ),
+                            "----------------------------------------------------------------"
+                                .to_string(),
                         ];
-                        
+
                         if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
                             for bot in bots {
-                                let name = bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
-                                let healthy = bot.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
-                                let failures = bot.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0);
-                                let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
-                                let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let name =
+                                    bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
+                                let healthy = bot
+                                    .get("healthy")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                let failures = bot
+                                    .get("consecutive_failures")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let gateway_failures = bot
+                                    .get("gateway_failures")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let uptime_secs = bot
+                                    .get("uptime_seconds")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
                                 let uptime = format_uptime(uptime_secs);
                                 let status_str = if healthy { "OK" } else { "DOWN" };
-                                
+
                                 lines.push(format!(
-                                    "{:14} {:>6} {:>8} {:>6} {:>6}", 
-                                    name, 
-                                    status_str,
-                                    uptime,
-                                    failures,
-                                    gateway_failures
+                                    "{:14} {:>6} {:>8} {:>6} {:>6}",
+                                    name, status_str, uptime, failures, gateway_failures
                                 ));
                             }
                         }
-                        
-             lines.push("----------------------------------------------------------------".to_string());
+
+                        lines.push(
+                            "----------------------------------------------------------------"
+                                .to_string(),
+                        );
                         lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
                         lines.push("```".to_string());
-                        
+
                         let message = lines.join("\n");
-                        let _ = command_interaction.create_response(&ctx.http,
-                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(message))
-                        ).await;
+                        let _ = command_interaction
+                            .create_response(
+                                &ctx.http,
+                                CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new().content(message),
+                                ),
+                            )
+                            .await;
                     }
                     Ok(())
                 }
@@ -551,9 +634,15 @@ impl EventHandler for Bot {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        info!("🔔 MESSAGE RECEIVED: '{}' from {} in channel {}", msg.content, msg.author.name, msg.channel_id);
-        debug!("Received message: '{}' from {}", msg.content, msg.author.name);
-        
+        info!(
+            "🔔 MESSAGE RECEIVED: '{}' from {} in channel {}",
+            msg.content, msg.author.name, msg.channel_id
+        );
+        debug!(
+            "Received message: '{}' from {}",
+            msg.content, msg.author.name
+        );
+
         // Ignore messages from bots
         if msg.author.bot {
             debug!("Ignoring message from bot: {}", msg.author.name);
@@ -563,34 +652,43 @@ impl EventHandler for Bot {
         // Check if message starts with ! followed by this bot's crypto name OR if bot is mentioned
         let command = format!("!{}", self.config.crypto_name.to_lowercase());
         let content_lower = msg.content.to_lowercase();
-        
+
         // Handle !shanghai as alias for SHANGHAISILVER
-        let is_shanghai_alias = self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghai";
-        
-        let is_command = content_lower == command || content_lower.starts_with(&format!("{} ", command)) || is_shanghai_alias;
-        
+        let is_shanghai_alias =
+            self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghai";
+
+        let is_command = content_lower == command
+            || content_lower.starts_with(&format!("{} ", command))
+            || is_shanghai_alias;
+
         // SILVER and SHANGHAISILVER bots respond to their respective chart commands
         let is_chart = self.config.crypto_name == "SILVER" && content_lower == "!silverchart";
-        
-        let is_shanghai_chart = self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghaichart";
-        
+
+        let is_shanghai_chart =
+            self.config.crypto_name == "SHANGHAISILVER" && content_lower == "!shanghaichart";
+
         // !status command - only BTC bot responds
         let is_status = self.config.crypto_name == "BTC" && content_lower == "!status";
-        
+
         // Generic chart command: !<ticker>chart (e.g., !solchart)
         let generic_chart_cmd = format!("!{}chart", self.config.crypto_name.to_lowercase());
         let is_generic_chart = msg.content.to_lowercase() == generic_chart_cmd;
-        
+
         let is_mentioned = msg.mentions_me(&ctx).await.unwrap_or(false);
-        
-        debug!("Looking for command: '{}' in message: '{}', is_command: {}, is_mentioned: {}", 
-               command, msg.content, is_command, is_mentioned);
-        
+
+        debug!(
+            "Looking for command: '{}' in message: '{}', is_command: {}, is_mentioned: {}",
+            command, msg.content, is_command, is_mentioned
+        );
+
         if is_command || is_mentioned {
             debug!("Received {} command from {}", command, msg.author.name);
 
             // Get the same price data as the slash command
-            match self.handle_price_command_for_message(&msg.channel_id, &ctx).await {
+            match self
+                .handle_price_command_for_message(&msg.channel_id, &ctx)
+                .await
+            {
                 Ok(_) => {
                     debug!("Successfully responded to {} command", command);
                     self.health.update_discord_timestamp();
@@ -598,72 +696,108 @@ impl EventHandler for Bot {
                 Err(e) => {
                     error!("Failed to handle {} command: {}", command, e);
                     // Try to send an error message
-                    if let Err(send_err) = msg.channel_id.say(&ctx.http, format!("❌ Error: {}", e)).await {
+                    if let Err(send_err) = msg
+                        .channel_id
+                        .say(&ctx.http, format!("❌ Error: {}", e))
+                        .await
+                    {
                         error!("Failed to send error message: {}", send_err);
                     }
                 }
             }
         } else if is_chart {
-             debug!("Received chart command from {}", msg.author.name);
-             
-             // silverchart always uses SILVER (database history)
-             let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, "SILVER", "📊 30-Day Chart for SILVER").await;
+            debug!("Received chart command from {}", msg.author.name);
 
+            // silverchart always uses SILVER (database history)
+            let _ = self
+                .send_chart_to_channel(
+                    &ctx,
+                    &msg.channel_id,
+                    "SILVER",
+                    "📊 30-Day Chart for SILVER",
+                )
+                .await;
         } else if is_shanghai_chart {
-             debug!("Received !shanghaichart command from {}", msg.author.name);
-             
-             // SHANGHAISILVER uses database history
-             let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, "SHANGHAISILVER", "📊 30-Day Chart for Shanghai Silver").await;
+            debug!("Received !shanghaichart command from {}", msg.author.name);
 
+            // SHANGHAISILVER uses database history
+            let _ = self
+                .send_chart_to_channel(
+                    &ctx,
+                    &msg.channel_id,
+                    "SHANGHAISILVER",
+                    "📊 30-Day Chart for Shanghai Silver",
+                )
+                .await;
         } else if is_generic_chart {
-             debug!("Received generic chart command from {}", msg.author.name);
-             let crypto_name = &self.config.crypto_name;
-             let title = format!("📊 30-Day History for {}", crypto_name);
-             let _ = self.send_chart_to_channel(&ctx, &msg.channel_id, crypto_name, &title).await;
-
+            debug!("Received generic chart command from {}", msg.author.name);
+            let crypto_name = &self.config.crypto_name;
+            let title = format!("📊 30-Day History for {}", crypto_name);
+            let _ = self
+                .send_chart_to_channel(&ctx, &msg.channel_id, crypto_name, &title)
+                .await;
         } else if is_status {
-             debug!("Received !status command from {}", msg.author.name);
-             let status = self.health_aggregator.to_json();
-             let total_bots = status.get("total_bots").and_then(|v| v.as_u64()).unwrap_or(0);
-             let healthy_bots = status.get("healthy_bots").and_then(|v| v.as_u64()).unwrap_or(0);
-             
-             let mut lines = vec![
-                 "```".to_string(),
-                 format!("{:14} {:>6} {:>8} {:>6} {:>6}", "Bot", "Status", "Uptime", "Fails", "GW"),
-                 "----------------------------------------------------------------".to_string(),
-             ];
-             
-             if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
-                 for bot in bots {
-                     let name = bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
-                     let healthy = bot.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
-                     let failures = bot.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0);
-                     let gateway_failures = bot.get("gateway_failures").and_then(|v| v.as_u64()).unwrap_or(0);
-                     let uptime_secs = bot.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
-                     let uptime = format_uptime(uptime_secs);
-                     let status_str = if healthy { "OK" } else { "DOWN" };
-                     
-                     lines.push(format!(
-                         "{:14} {:>6} {:>8} {:>6} {:>6}", 
-                         name, 
-                         status_str,
-                         uptime,
-                         failures,
-                         gateway_failures
-                     ));
-                 }
-             }
-             
-             lines.push("--------------------------------------------------------".to_string());
-             lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
-             lines.push("```".to_string());
-             
-             let message = lines.join("\n");
-             let _ = msg.channel_id.say(&ctx.http, message).await;
-             self.health.update_discord_timestamp();
+            debug!("Received !status command from {}", msg.author.name);
+            let status = self.health_aggregator.to_json();
+            let total_bots = status
+                .get("total_bots")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let healthy_bots = status
+                .get("healthy_bots")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
 
+            let mut lines = vec![
+                "```".to_string(),
+                format!(
+                    "{:14} {:>6} {:>8} {:>6} {:>6}",
+                    "Bot", "Status", "Uptime", "Fails", "GW"
+                ),
+                "----------------------------------------------------------------".to_string(),
+            ];
+
+            if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
+                for bot in bots {
+                    let name = bot.get("bot_name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let healthy = bot
+                        .get("healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let failures = bot
+                        .get("consecutive_failures")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let gateway_failures = bot
+                        .get("gateway_failures")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let uptime_secs = bot
+                        .get("uptime_seconds")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let uptime = format_uptime(uptime_secs);
+                    let status_str = if healthy { "OK" } else { "DOWN" };
+
+                    lines.push(format!(
+                        "{:14} {:>6} {:>8} {:>6} {:>6}",
+                        name, status_str, uptime, failures, gateway_failures
+                    ));
+                }
+            }
+
+            lines.push("--------------------------------------------------------".to_string());
+            lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
+            lines.push("```".to_string());
+
+            let message = lines.join("\n");
+            let _ = msg.channel_id.say(&ctx.http, message).await;
+            self.health.update_discord_timestamp();
         } else {
-            debug!("Message '{}' does not match command '{}'", msg.content, command);
+            debug!(
+                "Message '{}' does not match command '{}'",
+                msg.content, command
+            );
         }
     }
 }
@@ -677,10 +811,7 @@ async fn read_prices_from_file() -> BotResult<PricesFile> {
         // Check if file exists
         if !std::path::Path::new(file_path).exists() {
             if attempt < MAX_RETRIES {
-                warn!(
-                    "Prices file not found (attempt {}), retrying...",
-                    attempt
-                );
+                warn!("Prices file not found (attempt {}), retrying...", attempt);
                 sleep(Duration::from_millis(1000 * attempt as u64)).await;
                 continue;
             }
@@ -906,9 +1037,12 @@ async fn price_update_loop(
             Ok(time) => time / config.update_interval.as_secs(),
             Err(_) => 0,
         };
-        
+
         if update_count % 10 == 0 {
-            debug!("Running periodic Discord connectivity test for {}", crypto_name);
+            debug!(
+                "Running periodic Discord connectivity test for {}",
+                crypto_name
+            );
             tokio::spawn({
                 let health_clone = health.clone();
                 async move {
@@ -923,7 +1057,10 @@ async fn price_update_loop(
 
         if loop_duration < target_interval {
             let sleep_time = target_interval - loop_duration;
-            debug!("Update took {:?}, sleeping for {:?}", loop_duration, sleep_time);
+            debug!(
+                "Update took {:?}, sleeping for {:?}",
+                loop_duration, sleep_time
+            );
             sleep(sleep_time).await;
         } else {
             warn!(
@@ -1019,15 +1156,17 @@ fn format_custom_status(
         }
         "SILVER" | "XAG" => {
             // For Silver bot, show Gold/Silver ratio
-            let gold_price = shared_prices.prices.get("GOLD")
+            let gold_price = shared_prices
+                .prices
+                .get("GOLD")
                 .or_else(|| shared_prices.prices.get("XAU"))
                 .or_else(|| shared_prices.prices.get("PAXG"))
                 .map(|p| p.price);
-                
+
             let ratio_str = if let Some(gold) = gold_price {
-                 format!("Au/Ag: {:.2}", gold / current_price)
+                format!("Au/Ag: {:.2}", gold / current_price)
             } else {
-                 format!("{:.8} ₿", btc_amount) // Fallback
+                format!("{:.8} ₿", btc_amount) // Fallback
             };
 
             match update_count {
@@ -1048,16 +1187,17 @@ fn format_custom_status(
         "SHANGHAI" => {
             // For Shanghai bot, scroll through Premium and Premium Percent
             match update_count {
-                0 | 3 => { // Show arrow/building history on 0 and 3 (half the time, or custom cycle)
-                     // User asked for "always update price... and then cycle 2 and 3 would be underneath"
-                     // Actually user said: "watching area scroll through the price delta 'premium'... and percentage delta"
-                     // The default status (update_count 0) usually shows price change. 
-                     // Let's make it: 
-                     // 0: Price Change (standard)
-                     // 1: Premium $
-                     // 2: Premium %
-                     // 3: Source or back to standard
-                    
+                0 | 3 => {
+                    // Show arrow/building history on 0 and 3 (half the time, or custom cycle)
+                    // User asked for "always update price... and then cycle 2 and 3 would be underneath"
+                    // Actually user said: "watching area scroll through the price delta 'premium'... and percentage delta"
+                    // The default status (update_count 0) usually shows price change.
+                    // Let's make it:
+                    // 0: Price Change (standard)
+                    // 1: Premium $
+                    // 2: Premium %
+                    // 3: Source or back to standard
+
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
                     } else {
@@ -1065,16 +1205,20 @@ fn format_custom_status(
                         format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
                     }
                 }
-                
+
                 1 => {
-                    let premium = shared_prices.prices.get("SHANGHAI")
+                    let premium = shared_prices
+                        .prices
+                        .get("SHANGHAI")
                         .and_then(|p| p.premium)
                         .unwrap_or(0.0);
                     format!("Prem: ${:.2}", premium)
                 }
-                
+
                 2 => {
-                    let premium_pct = shared_prices.prices.get("SHANGHAI")
+                    let premium_pct = shared_prices
+                        .prices
+                        .get("SHANGHAI")
                         .and_then(|p| p.premium_percent)
                         .unwrap_or(0.0);
                     format!("Prem: {:.2}%", premium_pct)
@@ -1092,10 +1236,12 @@ fn format_custom_status(
                         format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
                     }
                 }
-                
+
                 1 => {
                     // Calculate premium: SHANGHAISILVER - SILVER
-                    let silver_price = shared_prices.prices.get("SILVER")
+                    let silver_price = shared_prices
+                        .prices
+                        .get("SILVER")
                         .map(|p| p.price)
                         .unwrap_or(0.0);
                     let premium = if silver_price > 0.0 {
@@ -1105,10 +1251,12 @@ fn format_custom_status(
                     };
                     format!("Prem: ${:.2}", premium)
                 }
-                
+
                 2 => {
                     // Calculate premium percent
-                    let silver_price = shared_prices.prices.get("SILVER")
+                    let silver_price = shared_prices
+                        .prices
+                        .get("SILVER")
                         .map(|p| p.price)
                         .unwrap_or(0.0);
                     let premium_pct = if silver_price > 0.0 {
@@ -1153,7 +1301,10 @@ async fn get_crypto_price(config: &BotConfig, database: &Arc<PriceDatabase>) -> 
                 return Ok(price);
             }
             Ok(price) => {
-                debug!("Got SHANGHAISILVER price but it's zero or negative: {}", price);
+                debug!(
+                    "Got SHANGHAISILVER price but it's zero or negative: {}",
+                    price
+                );
             }
             Err(e) => {
                 debug!("Failed to get SHANGHAISILVER from database: {}", e);
@@ -1277,11 +1428,8 @@ async fn get_individual_crypto_price(feed_id: &str) -> BotResult<f64> {
 /// Test Discord connectivity by making a simple API call
 async fn test_discord_connectivity(health: Arc<HealthState>) {
     use reqwest::Client;
-    
-    let client = match Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
+
+    let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
         Ok(client) => client,
         Err(e) => {
             error!("Failed to create HTTP client for Discord test: {}", e);
@@ -1289,7 +1437,7 @@ async fn test_discord_connectivity(health: Arc<HealthState>) {
             return;
         }
     };
-    
+
     match client
         .get("https://discord.com/api/v10/gateway")
         .header("User-Agent", "Discord-Bot-Health-Check/1.0")
@@ -1302,7 +1450,10 @@ async fn test_discord_connectivity(health: Arc<HealthState>) {
                 health.update_discord_test_timestamp();
                 health.reset_discord_test_failures();
             } else {
-                warn!("Discord connectivity test failed with status: {}", response.status());
+                warn!(
+                    "Discord connectivity test failed with status: {}",
+                    response.status()
+                );
                 health.increment_discord_test_failures();
             }
         }

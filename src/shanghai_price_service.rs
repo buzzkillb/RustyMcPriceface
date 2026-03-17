@@ -9,9 +9,15 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-const UPDATE_INTERVAL_SECONDS: u64 = 1800; // 30 minutes
 const CRYPTO_NAME: &str = "SHANGHAISILVER";
 const FILE_PATH: &str = "shared/prices.json";
+
+fn get_update_interval() -> u64 {
+    std::env::var("UPDATE_INTERVAL_SECONDS")
+        .unwrap_or_else(|_| "1800".to_string())
+        .parse::<u64>()
+        .unwrap_or(1800)
+}
 
 /// Check if Shanghai Gold Exchange is currently in trading hours
 /// SGE Trading Hours in UTC:
@@ -23,19 +29,26 @@ fn is_sge_market_open() -> bool {
     let hour = ((timestamp / 3600) % 24) as u32;
     let minute = ((timestamp / 60) % 60) as u32;
     let time = hour * 60 + minute; // minutes since midnight UTC
-    
+
     // Day session: 01:00-07:30 UTC (60-450)
     let day_session = time >= 60 && time <= 450;
-    
+
     // Night session: 12:00-18:30 UTC (720-1110)
     let night_session = time >= 720 && time <= 1110;
-    
+
     day_session || night_session
 }
 
-pub async fn run(database: Arc<PriceDatabase>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run(
+    database: Arc<PriceDatabase>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let update_interval = get_update_interval();
     info!("🚀 Starting Shanghai Silver Price Service...");
-    info!("📊 Update interval: {} seconds (30 minutes)", UPDATE_INTERVAL_SECONDS);
+    info!(
+        "📊 Update interval: {} seconds ({} minutes)",
+        update_interval,
+        update_interval / 60
+    );
     info!("🕐 SGE Trading Hours - Day: 01:00-07:30 UTC, Night: 12:00-18:30 UTC");
 
     let shared_dir = "shared";
@@ -76,25 +89,33 @@ pub async fn run(database: Arc<PriceDatabase>) -> Result<(), Box<dyn std::error:
             }
         } else {
             let now = Utc::now();
-            info!("🔴 SGE Market is CLOSED - skipping fetch at {} UTC", now.format("%H:%M"));
+            info!(
+                "🔴 SGE Market is CLOSED - skipping fetch at {} UTC",
+                now.format("%H:%M")
+            );
             info!("💾 Using last known price from database");
         }
 
         let loop_duration = loop_start.elapsed();
-        let target_interval = Duration::from_secs(UPDATE_INTERVAL_SECONDS);
+        let target_interval = Duration::from_secs(update_interval);
 
         if loop_duration < target_interval {
             let sleep_time = target_interval - loop_duration;
             info!("😴 Sleeping for {:?}", sleep_time);
             sleep(sleep_time).await;
         } else {
-            warn!("⚠️ Update took longer than interval: {:?} > {:?}", loop_duration, target_interval);
+            warn!(
+                "⚠️ Update took longer than interval: {:?} > {:?}",
+                loop_duration, target_interval
+            );
             sleep(Duration::from_secs(1)).await;
         }
     }
 }
 
-fn update_prices_json(price_data: &PriceData) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn update_prices_json(
+    price_data: &PriceData,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut prices = HashMap::new();
 
     if Path::new(FILE_PATH).exists() {
@@ -110,10 +131,7 @@ fn update_prices_json(price_data: &PriceData) -> Result<(), Box<dyn std::error::
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
 
-    let prices_file = PricesFile {
-        prices,
-        timestamp,
-    };
+    let prices_file = PricesFile { prices, timestamp };
 
     let json_string = serde_json::to_string_pretty(&prices_file)?;
     fs::write(FILE_PATH, json_string)?;
