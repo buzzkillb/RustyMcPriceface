@@ -315,10 +315,10 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                 error!("Failed to fetch {} price: {}", crypto, e);
                 warn!("⚠️ Using FALLBACK price for {} - API may be down!", crypto);
                 let default_price = match crypto.as_str() {
-                    "BTC" => 45000.0,
-                    "ETH" => 2800.0,
-                    "SOL" => 95.0,
-                    "WIF" => 2.0,
+                    "BTC" => 100000.0,
+                    "ETH" => 3500.0,
+                    "SOL" => 150.0,
+                    "WIF" => 2.5,
                     _ => 1.0,
                 };
                 prices.insert(
@@ -396,7 +396,11 @@ pub async fn fetch_shanghai_silver_price(
     let (shanghai_spot, western_spot) = fetch_goldsilver_ai_prices().await?;
 
     let premium = shanghai_spot - western_spot;
-    let premium_percent = (premium / western_spot) * 100.0;
+    let premium_percent = if western_spot > 0.0 {
+        (premium / western_spot) * 100.0
+    } else {
+        0.0
+    };
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
