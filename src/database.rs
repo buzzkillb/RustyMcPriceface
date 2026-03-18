@@ -33,6 +33,7 @@ impl PriceDatabase {
                          timestamp INTEGER NOT NULL,
                          created_at TEXT DEFAULT CURRENT_TIMESTAMP
                      );
+                     CREATE UNIQUE INDEX IF NOT EXISTS idx_prices_crypto_timestamp_unique ON prices(crypto_name, timestamp);
                      CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp ON prices(crypto_name, timestamp);
                      CREATE TABLE IF NOT EXISTS price_aggregates (
                          id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +85,7 @@ impl PriceDatabase {
         let current_time = get_current_timestamp()?;
 
         let mut stmt = conn.prepare_cached(
-            "INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)",
         )?;
 
         stmt.execute([crypto_name, &price.to_string(), &current_time.to_string()])?;

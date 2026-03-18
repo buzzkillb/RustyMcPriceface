@@ -350,12 +350,14 @@ impl Bot {
         // Note: SHANGHAI premium data is not available
         if crypto_name == "SHANGHAISILVER" {
             if let Some(silver_price) = all_prices.get("SILVER") {
-                let prem = current_price - silver_price;
-                let prem_pct = (prem / silver_price) * 100.0;
-                response.push_str(&format!(
-                    "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
-                    prem, prem_pct
-                ));
+                if *silver_price > 0.0 {
+                    let prem = current_price - silver_price;
+                    let prem_pct = (prem / silver_price) * 100.0;
+                    response.push_str(&format!(
+                        "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
+                        prem, prem_pct
+                    ));
+                }
             }
         }
 
@@ -1046,24 +1048,38 @@ fn format_custom_status(
     change_percent: f64,
 ) -> String {
     // Calculate ticker price in terms of BTC, ETH, SOL
-    let btc_amount = current_price
-        / shared_prices
-            .prices
-            .get("BTC")
-            .map(|p| p.price)
-            .unwrap_or(45000.0);
-    let eth_amount = current_price
-        / shared_prices
-            .prices
-            .get("ETH")
-            .map(|p| p.price)
-            .unwrap_or(2800.0);
-    let sol_amount = current_price
-        / shared_prices
-            .prices
-            .get("SOL")
-            .map(|p| p.price)
-            .unwrap_or(95.0);
+    // Use fallback values only if key doesn't exist; guard against zero prices
+    let btc_price = shared_prices
+        .prices
+        .get("BTC")
+        .map(|p| p.price)
+        .unwrap_or(45000.0);
+    let eth_price = shared_prices
+        .prices
+        .get("ETH")
+        .map(|p| p.price)
+        .unwrap_or(2800.0);
+    let sol_price = shared_prices
+        .prices
+        .get("SOL")
+        .map(|p| p.price)
+        .unwrap_or(95.0);
+
+    let btc_amount = if btc_price > 0.0 {
+        current_price / btc_price
+    } else {
+        0.0
+    };
+    let eth_amount = if eth_price > 0.0 {
+        current_price / eth_price
+    } else {
+        0.0
+    };
+    let sol_amount = if sol_price > 0.0 {
+        current_price / sol_price
+    } else {
+        0.0
+    };
 
     match crypto_name {
         "BTC" => {

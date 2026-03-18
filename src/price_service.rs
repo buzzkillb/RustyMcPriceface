@@ -99,6 +99,18 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
                                                 .and_then(|e| e.as_i64())
                                                 .unwrap_or(0);
                                             let real_price = price as f64 * 10f64.powi(expo as i32);
+
+                                            if real_price <= 0.0
+                                                || real_price.is_nan()
+                                                || real_price.is_infinite()
+                                            {
+                                                error!(
+                                                    "Invalid price value from Pyth API: {}",
+                                                    real_price
+                                                );
+                                                return Err("Invalid price value from API".into());
+                                            }
+
                                             return Ok(real_price);
                                         }
                                     }
@@ -234,6 +246,11 @@ async fn fetch_yahoo_price(
                                     .get("regularMarketPrice")
                                     .and_then(|p| p.as_f64())
                                     .ok_or("Missing regularMarketPrice")?;
+
+                                if price <= 0.0 || price.is_nan() || price.is_infinite() {
+                                    error!("Invalid Yahoo price value: {}", price);
+                                    return Err("Invalid price value from Yahoo API".into());
+                                }
 
                                 // Parse timestamp if available, else use current
                                 let timestamp = std::time::SystemTime::now()
