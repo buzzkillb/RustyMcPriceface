@@ -17,6 +17,8 @@ pub struct PriceData {
     pub premium: Option<f64>,
     pub premium_percent: Option<f64>,
     pub source: Option<String>,
+    #[serde(default)]
+    pub is_fallback: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -263,6 +265,7 @@ async fn fetch_yahoo_price(
                                     premium: None,
                                     premium_percent: None,
                                     source: Some("yahoo".to_string()),
+                                    is_fallback: false,
                                 });
                             }
                         }
@@ -303,6 +306,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                         premium: None,
                         premium_percent: None,
                         source: None,
+                        is_fallback: false,
                     },
                 );
                 info!("Fetched {} price: ${:.6}", crypto, price);
@@ -325,6 +329,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                         premium: None,
                         premium_percent: None,
                         source: None,
+                        is_fallback: true,
                     },
                 );
             }
@@ -408,6 +413,7 @@ pub async fn fetch_shanghai_silver_price(
         premium: Some(premium),
         premium_percent: Some(premium_percent),
         source: Some("shanghaisilver_spot".to_string()),
+        is_fallback: false,
     })
 }
 

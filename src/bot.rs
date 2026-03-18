@@ -873,8 +873,9 @@ async fn price_update_loop(
             };
 
             // Format the custom status with rotation
+            let update_interval_secs = config.update_interval.as_secs().max(1);
             let update_count = match get_current_timestamp() {
-                Ok(time) => (time / 12) % 4,
+                Ok(time) => (time / update_interval_secs) % 4,
                 Err(_) => 0,
             };
 
