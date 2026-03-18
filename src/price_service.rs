@@ -475,8 +475,8 @@ fn extract_first_number_after(html: &str, prefix: &str) -> Option<f64> {
     if let Some(pos) = html.find(prefix) {
         let after_prefix = &html[pos + prefix.len()..];
 
-        // Use regex to find first number after prefix
-        let re = regex::Regex::new(r"-?\d*\.?\d+").ok()?;
+        // Use safer regex pattern to avoid ReDoS - requires at least one digit
+        let re = regex::Regex::new(r"-?\d+(?:\.\d+)?").ok()?;
         if let Some(m) = re.find(after_prefix) {
             let num_str = m.as_str();
             // Skip if it's just a decimal point or empty

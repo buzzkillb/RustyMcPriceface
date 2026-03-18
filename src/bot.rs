@@ -475,7 +475,7 @@ impl EventHandler for Bot {
                         Err(e) => {
                             error!("Price command failed: {}", e);
                             let data = CreateInteractionResponseMessage::new()
-                                .content(format!("❌ Error: {}", e));
+                                .content(format!("❌ Error: {}", e.user_message()));
                             let builder = CreateInteractionResponse::Message(data);
                             command_interaction
                                 .create_response(&ctx.http, builder)
@@ -492,7 +492,7 @@ impl EventHandler for Bot {
                                 &ctx.http,
                                 CreateInteractionResponse::Message(
                                     CreateInteractionResponseMessage::new()
-                                        .content(format!("❌ Error: {}", e)),
+                                        .content(format!("❌ Error: {}", e.user_message())),
                                 ),
                             )
                             .await;
@@ -652,7 +652,7 @@ impl EventHandler for Bot {
                     // Try to send an error message
                     if let Err(send_err) = msg
                         .channel_id
-                        .say(&ctx.http, format!("❌ Error: {}", e))
+                        .say(&ctx.http, format!("❌ Error: {}", e.user_message()))
                         .await
                     {
                         error!("Failed to send error message: {}", send_err);

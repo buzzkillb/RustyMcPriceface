@@ -54,7 +54,7 @@ impl PriceDatabase {
         });
 
         let pool = Pool::builder()
-            .max_size(10) // Allow up to 10 concurrent connections
+            .max_size(4) // SQLite performs better with fewer connections
             .build(manager)
             .map_err(|e| {
                 BotError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
