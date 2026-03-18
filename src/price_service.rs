@@ -449,22 +449,18 @@ fn extract_first_number_after(html: &str, prefix: &str) -> Option<f64> {
         let after_prefix = &html[pos + prefix.len()..];
 
         // Use regex to find first number after prefix
-        let re = regex::Regex::new(r"-?\d+\.?\d*").ok()?;
+        let re = regex::Regex::new(r"-?\d*\.?\d+").ok()?;
         if let Some(m) = re.find(after_prefix) {
-            return m.as_str().parse::<f64>().ok();
+            let num_str = m.as_str();
+            // Skip if it's just a decimal point or empty
+            if num_str.is_empty() || num_str == "." {
+                return None;
+            }
+            return num_str.parse::<f64>().ok();
         }
     }
 
-    // Fallback: find all numbers and return the largest (reasonable for prices)
-    let re = regex::Regex::new(r"-?\d+\.?\d*").ok()?;
-    let numbers: Vec<f64> = re
-        .find_iter(html)
-        .filter_map(|m| m.as_str().parse::<f64>().ok())
-        .collect();
-
-    numbers
-        .into_iter()
-        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    None
 }
 
 pub async fn run(

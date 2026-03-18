@@ -6,7 +6,10 @@ use tracing::{error, info};
 
 pub type SharedHealth = Arc<HealthAggregator>;
 
-pub async fn start_health_server(health: SharedHealth, port: u16) {
+pub async fn start_health_server(
+    health: SharedHealth,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/", get(health_check))
@@ -15,17 +18,15 @@ pub async fn start_health_server(health: SharedHealth, port: u16) {
 
     let addr = format!("127.0.0.1:{}", port);
 
-    match TcpListener::bind(&addr).await {
-        Ok(listener) => {
-            info!("Health check server listening on {}", addr);
-            if let Err(e) = axum::serve(listener, app).await {
-                error!("Health server error: {}", e);
-            }
-        }
-        Err(e) => {
-            error!("Failed to bind health server to {}: {}", addr, e);
-        }
-    }
+    let listener = TcpListener::bind(&addr).await.map_err(|e| {
+        error!("Failed to bind health server to {}: {}", addr, e);
+        e
+    })?;
+
+    info!("Health check server listening on {}", addr);
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
 
 async fn health_check(

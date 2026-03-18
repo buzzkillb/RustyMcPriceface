@@ -346,25 +346,17 @@ impl Bot {
             }
         }
 
-        // Add Shanghai Premium info
-        if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
-            // For SHANGHAISILVER, calculate premium from SILVER price
-            let (premium, premium_percent) = if crypto_name == "SHANGHAISILVER" {
-                if let Some(silver_price) = all_prices.get("SILVER") {
-                    let prem = current_price - silver_price;
-                    let prem_pct = (prem / silver_price) * 100.0;
-                    (prem, prem_pct)
-                } else {
-                    (0.0, 0.0)
-                }
-            } else {
-                (0.0, 0.0) // For SHANGHAI, we'd need premium data from elsewhere
-            };
-
-            response.push_str(&format!(
-                "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
-                premium, premium_percent
-            ));
+        // Add Shanghai Premium info for SHANGHAISILVER only
+        // Note: SHANGHAI premium data is not available
+        if crypto_name == "SHANGHAISILVER" {
+            if let Some(silver_price) = all_prices.get("SILVER") {
+                let prem = current_price - silver_price;
+                let prem_pct = (prem / silver_price) * 100.0;
+                response.push_str(&format!(
+                    "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
+                    prem, prem_pct
+                ));
+            }
         }
 
         // Add conversion prices to response if available
@@ -1016,11 +1008,9 @@ async fn price_update_loop(
                 "Running periodic Discord connectivity test for {}",
                 crypto_name
             );
-            tokio::spawn({
-                let health_clone = health.clone();
-                async move {
-                    test_discord_connectivity(health_clone).await;
-                }
+            let health_clone = health.clone();
+            tokio::spawn(async move {
+                test_discord_connectivity(health_clone).await;
             });
         }
 
@@ -1089,7 +1079,7 @@ fn format_custom_status(
                 }
                 1 => format!("{:.8} Ξ", eth_amount),
                 2 => format!("{:.8} ◎", sol_amount),
-                3 => format!("{:.8} Ξ", eth_amount),
+                3 => format!("${:.2}", current_price),
                 _ => unreachable!(),
             }
         }

@@ -15,11 +15,15 @@ const RATE_LIMIT_DELAY_MS: u64 = 2000; // 2 seconds between Discord API calls
 #[derive(Clone)]
 pub struct DiscordApi {
     http: Arc<Http>,
+    semaphore: Arc<Semaphore>,
 }
 
 impl DiscordApi {
     pub fn new(http: Arc<Http>) -> Self {
-        Self { http }
+        Self {
+            http,
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CALLS)),
+        }
     }
 
     /// Rate-limited Discord API call helper
@@ -28,9 +32,8 @@ impl DiscordApi {
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, serenity::Error>>,
     {
-        static SEMAPHORE: Semaphore = Semaphore::const_new(MAX_CONCURRENT_CALLS);
-
-        let _permit = SEMAPHORE
+        let _permit = self
+            .semaphore
             .acquire()
             .await
             .map_err(|_| serenity::Error::Other("Semaphore acquire error"))?;

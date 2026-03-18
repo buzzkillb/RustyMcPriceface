@@ -51,4 +51,4 @@ impl From<std::num::ParseFloatError> for BotError {
     }
 }
 
-pub type BotResult<T> = Result<T, BotError>; 
+pub type BotResult<T> = Result<T, BotError>;
