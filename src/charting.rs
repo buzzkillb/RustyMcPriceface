@@ -1,4 +1,5 @@
 use crate::price_service::HistoryData;
+use image::ImageEncoder;
 use plotters::prelude::*;
 use std::error::Error;
 
@@ -120,7 +121,12 @@ pub fn generate_shanghai_chart(
     // For now, I'll write the code assuming `image` crate usage.
 
     let encoder = image::codecs::png::PngEncoder::new(&mut image_data);
-    image.write_with_encoder(encoder)?;
+    encoder.write_image(
+        image.as_raw(),
+        width,
+        height,
+        image::ExtendedColorType::Rgb8,
+    )?;
 
     Ok(image_data)
 }
@@ -151,7 +157,12 @@ pub fn generate_price_chart(
             let image = image::RgbImage::from_raw(width, height, buffer)
                 .ok_or("Failed to create image buffer")?;
             let encoder = image::codecs::png::PngEncoder::new(&mut image_data);
-            image.write_with_encoder(encoder)?;
+            encoder.write_image(
+                image.as_raw(),
+                width,
+                height,
+                image::ExtendedColorType::Rgb8,
+            )?;
             return Ok(image_data);
         }
 
@@ -229,7 +240,12 @@ pub fn generate_price_chart(
     let image =
         image::RgbImage::from_raw(width, height, buffer).ok_or("Failed to create image buffer")?;
     let encoder = image::codecs::png::PngEncoder::new(&mut image_data);
-    image.write_with_encoder(encoder)?;
+    encoder.write_image(
+        image.as_raw(),
+        width,
+        height,
+        image::ExtendedColorType::Rgb8,
+    )?;
 
     Ok(image_data)
 }
