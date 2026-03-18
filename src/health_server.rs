@@ -31,11 +31,14 @@ pub async fn start_health_server(health: SharedHealth, port: u16) {
 async fn health_check(
     State(health): State<SharedHealth>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let health_data = health.to_json();
     let is_healthy = health.is_healthy();
 
+    let response = serde_json::json!({
+        "healthy": is_healthy
+    });
+
     if is_healthy {
-        Ok(Json(health_data))
+        Ok(Json(response))
     } else {
         Err(StatusCode::SERVICE_UNAVAILABLE)
     }
@@ -62,15 +65,12 @@ async fn test_discord_connectivity(
         Err(_) => false,
     };
 
-    let health_data = _health.to_json();
-
     let response = serde_json::json!({
-        "discord_connectivity_test": test_result,
+        "discord_reachable": test_result,
         "timestamp": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs(),
-        "health_data": health_data
+            .as_secs()
     });
 
     if test_result {

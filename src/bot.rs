@@ -567,12 +567,8 @@ impl EventHandler for Bot {
 
                         let mut lines = vec![
                             "```".to_string(),
-                            format!(
-                                "{:14} {:>6} {:>8} {:>6} {:>6}",
-                                "Bot", "Status", "Uptime", "Fails", "GW"
-                            ),
-                            "----------------------------------------------------------------"
-                                .to_string(),
+                            format!("{:14} {:>8}", "Bot", "Status"),
+                            "----------------------------".to_string(),
                         ];
 
                         if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
@@ -583,32 +579,13 @@ impl EventHandler for Bot {
                                     .get("healthy")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
-                                let failures = bot
-                                    .get("consecutive_failures")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0);
-                                let gateway_failures = bot
-                                    .get("gateway_failures")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0);
-                                let uptime_secs = bot
-                                    .get("uptime_seconds")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0);
-                                let uptime = format_uptime(uptime_secs);
-                                let status_str = if healthy { "OK" } else { "DOWN" };
+                                let status_str = if healthy { "OK" } else { "DEGRADED" };
 
-                                lines.push(format!(
-                                    "{:14} {:>6} {:>8} {:>6} {:>6}",
-                                    name, status_str, uptime, failures, gateway_failures
-                                ));
+                                lines.push(format!("{:14} {:>8}", name, status_str));
                             }
                         }
 
-                        lines.push(
-                            "----------------------------------------------------------------"
-                                .to_string(),
-                        );
+                        lines.push("----------------------------".to_string());
                         lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
                         lines.push("```".to_string());
 
@@ -765,11 +742,8 @@ impl EventHandler for Bot {
 
             let mut lines = vec![
                 "```".to_string(),
-                format!(
-                    "{:14} {:>6} {:>8} {:>6} {:>6}",
-                    "Bot", "Status", "Uptime", "Fails", "GW"
-                ),
-                "----------------------------------------------------------------".to_string(),
+                format!("{:14} {:>8}", "Bot", "Status"),
+                "----------------------------".to_string(),
             ];
 
             if let Some(bots) = status.get("bots").and_then(|v| v.as_array()) {
@@ -779,29 +753,13 @@ impl EventHandler for Bot {
                         .get("healthy")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    let failures = bot
-                        .get("consecutive_failures")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let gateway_failures = bot
-                        .get("gateway_failures")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let uptime_secs = bot
-                        .get("uptime_seconds")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let uptime = format_uptime(uptime_secs);
-                    let status_str = if healthy { "OK" } else { "DOWN" };
+                    let status_str = if healthy { "OK" } else { "DEGRADED" };
 
-                    lines.push(format!(
-                        "{:14} {:>6} {:>8} {:>6} {:>6}",
-                        name, status_str, uptime, failures, gateway_failures
-                    ));
+                    lines.push(format!("{:14} {:>8}", name, status_str));
                 }
             }
 
-            lines.push("--------------------------------------------------------".to_string());
+            lines.push("----------------------------".to_string());
             lines.push(format!("Total: {} | Healthy: {}", total_bots, healthy_bots));
             lines.push("```".to_string());
 
