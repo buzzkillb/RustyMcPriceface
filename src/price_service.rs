@@ -146,7 +146,7 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
         }
     }
 
-    unreachable!()
+    Err("Unexpected error in price fetch retry loop".into())
 }
 
 pub async fn fetch_shanghai_history(

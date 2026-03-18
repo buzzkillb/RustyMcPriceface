@@ -209,7 +209,9 @@ impl Bot {
         match self.database.get_price_history(crypto_name, 30) {
             Ok(history) => {
                 if history.is_empty() {
-                    let _ = channel_id.say(&ctx.http, "❌ No historical data available yet (waiting for data to be collected)").await;
+                    if let Err(e) = channel_id.say(&ctx.http, "❌ No historical data available yet (waiting for data to be collected)").await {
+                        warn!("Failed to send empty history message: {}", e);
+                    }
                     return Ok(());
                 }
                 match generate_price_chart(&history, crypto_name) {
@@ -305,8 +307,10 @@ impl Bot {
                 .or_else(|| all_prices.get("PAXG"));
 
             if let Some(gold) = gold_price {
-                let ratio = gold / current_price;
-                conversion_prices.push(format!("Ratio: {:.2} (Au/Ag)", ratio));
+                if current_price > 0.0 {
+                    let ratio = gold / current_price;
+                    conversion_prices.push(format!("Ratio: {:.2} (Au/Ag)", ratio));
+                }
             }
         }
 
@@ -722,7 +726,9 @@ impl EventHandler for Bot {
             lines.push("```".to_string());
 
             let message = lines.join("\n");
-            let _ = msg.channel_id.say(&ctx.http, message).await;
+            if let Err(e) = msg.channel_id.say(&ctx.http, message).await {
+                warn!("Failed to send health status message: {}", e);
+            }
             self.health.update_discord_timestamp();
         } else {
             debug!(
@@ -775,7 +781,10 @@ async fn read_prices_from_file() -> BotResult<PricesFile> {
         }
     }
 
-    unreachable!()
+    Err(BotError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Unexpected error in prices file read retry loop",
+    )))
 }
 
 /// Main price update loop with comprehensive error handling
@@ -1125,7 +1134,11 @@ fn format_custom_status(
                 .map(|p| p.price);
 
             let ratio_str = if let Some(gold) = gold_price {
-                format!("Au/Ag: {:.2}", gold / current_price)
+                if current_price > 0.0 {
+                    format!("Au/Ag: {:.2}", gold / current_price)
+                } else {
+                    format!("{:.8} ₿", btc_amount)
+                }
             } else {
                 format!("{:.8} ₿", btc_amount) // Fallback
             };
@@ -1395,7 +1408,10 @@ async fn get_individual_crypto_price(feed_id: &str) -> BotResult<f64> {
         }
     }
 
-    unreachable!()
+    Err(BotError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Unexpected error in prices file read retry loop",
+    )))
 }
 
 /// Test Discord connectivity by making a simple API call

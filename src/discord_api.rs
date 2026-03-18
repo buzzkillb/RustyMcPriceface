@@ -27,12 +27,13 @@ impl DiscordApi {
     }
 
     /// Rate-limited Discord API call helper
+    #[allow(unused_variables)]
     async fn rate_limited_call<F, Fut, T>(&self, mut operation: F) -> Result<T, serenity::Error>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, serenity::Error>>,
     {
-        let _permit = self
+        let permit = self
             .semaphore
             .acquire()
             .await
@@ -41,7 +42,7 @@ impl DiscordApi {
         // Enforce minimum delay between calls
         sleep(Duration::from_millis(RATE_LIMIT_DELAY_MS)).await;
 
-        // Execute the operation with retry logic
+        // Execute the operation with retry logic - permit is held during all attempts
         for attempt in 1..=MAX_RETRIES {
             match operation().await {
                 Ok(result) => return Ok(result),
@@ -63,7 +64,7 @@ impl DiscordApi {
             }
         }
 
-        unreachable!()
+        Err(serenity::Error::Other("Rate limiting exhausted"))
     }
 
     /// Update bot nickname in a specific guild

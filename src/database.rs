@@ -163,7 +163,16 @@ impl PriceDatabase {
         ];
 
         for (seconds, label) in periods {
-            let time_ago = current_time - seconds;
+            // Guard against underflow if clock goes backwards
+            let time_ago = if current_time >= seconds {
+                current_time - seconds
+            } else {
+                debug!(
+                    "Clock appears to have gone backwards, skipping {} price lookup",
+                    label
+                );
+                continue;
+            };
 
             // Try to get price from appropriate data source based on age
             let old_price = if seconds <= 24 * 3600 {
