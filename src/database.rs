@@ -84,11 +84,10 @@ impl PriceDatabase {
         let conn = self.get_connection()?;
         let current_time = get_current_timestamp()?;
 
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)",
+        conn.execute(
+            "INSERT OR REPLACE INTO prices (crypto_name, price, timestamp) VALUES (?1, ?2, ?3)",
+            [crypto_name, &price.to_string(), &current_time.to_string()],
         )?;
-
-        stmt.execute([crypto_name, &price.to_string(), &current_time.to_string()])?;
         debug!("Saved {} price to database: ${}", crypto_name, price);
         Ok(())
     }
