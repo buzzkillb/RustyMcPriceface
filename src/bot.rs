@@ -4,8 +4,7 @@ use crate::discord_api::DiscordApi;
 use crate::errors::{BotError, BotResult};
 use crate::health::{HealthAggregator, HealthState};
 
-use crate::charting::{generate_price_chart, generate_shanghai_chart};
-use crate::price_service::fetch_shanghai_history;
+use crate::charting::generate_price_chart;
 use crate::price_service::PricesFile;
 use crate::utils::{format_price, get_current_timestamp, validate_crypto_name, validate_price};
 use serenity::{
@@ -166,67 +165,32 @@ impl Bot {
         // silverchart command always uses SILVER
         let crypto_name = "SILVER";
 
-        // SILVER uses database history, GOLD uses Shanghai API
-        if crypto_name == "SILVER" || crypto_name == "XAG" {
-            let history = self
-                .database
-                .get_price_history(crypto_name, 30)
-                .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
-
-            if history.is_empty() {
-                interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new().content("❌ No historical data available yet (waiting for data to be collected)")).await
-                    .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
-                return Ok(());
-            }
-
-            let image_data = generate_price_chart(&history, crypto_name)
-                .map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
-            let attachment = CreateAttachment::bytes(image_data, "chart.png");
-            interaction
-                .edit_response(
-                    &ctx.http,
-                    serenity::builder::EditInteractionResponse::new()
-                        .content(format!("📊 30-Day Chart for {}", crypto_name))
-                        .new_attachment(attachment),
-                )
-                .await
-                .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
-            return Ok(());
-        }
-
-        // GOLD still uses Shanghai API
-        let api_symbol = match crypto_name {
-            "GOLD" | "XAU" => Some("XAU"),
-            _ => None,
-        };
-
-        let history = fetch_shanghai_history("1Y", api_symbol)
-            .await
+        let history = self
+            .database
+            .get_price_history(crypto_name, 30)
             .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
 
         if history.is_empty() {
             interaction
                 .edit_response(
                     &ctx.http,
-                    serenity::builder::EditInteractionResponse::new()
-                        .content("❌ No historical data available"),
+                    serenity::builder::EditInteractionResponse::new().content(
+                        "❌ No historical data available yet (waiting for data to be collected)",
+                    ),
                 )
                 .await
                 .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
             return Ok(());
         }
 
-        // Generate Chart
-        let image_data = generate_shanghai_chart(&history, crypto_name)
+        let image_data = generate_price_chart(&history, crypto_name)
             .map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
-
-        // Send Response
         let attachment = CreateAttachment::bytes(image_data, "chart.png");
         interaction
             .edit_response(
                 &ctx.http,
                 serenity::builder::EditInteractionResponse::new()
-                    .content(format!("📊 1-Year Chart for {}", crypto_name))
+                    .content(format!("📊 30-Day Chart for {}", crypto_name))
                     .new_attachment(attachment),
             )
             .await
@@ -1048,6 +1012,14 @@ fn format_custom_status(
     arrow: &str,
     change_percent: f64,
 ) -> String {
+    // Check if current crypto's price is from fallback
+    let is_stale = shared_prices
+        .prices
+        .get(crypto_name)
+        .map(|p| p.is_fallback)
+        .unwrap_or(false);
+    let stale_indicator = if is_stale { " (stale)" } else { "" };
+
     // Calculate ticker price in terms of BTC, ETH, SOL
     // Use fallback values only if key doesn't exist; guard against zero prices
     let btc_price = shared_prices
@@ -1091,7 +1063,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} Ξ", eth_amount),
@@ -1108,7 +1083,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} ₿", btc_amount),
@@ -1125,7 +1103,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} ₿", btc_amount),
@@ -1155,7 +1136,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => ratio_str,
@@ -1182,7 +1166,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
 
@@ -1213,7 +1200,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
 
@@ -1257,7 +1247,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} ₿", btc_amount),
