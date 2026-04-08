@@ -12,6 +12,7 @@ pub async fn start_health_server(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/health/all", get(health_check_all))
         .route("/", get(health_check))
         .route("/test-discord", get(test_discord_connectivity))
         .with_state(health);
@@ -42,6 +43,19 @@ async fn health_check(
         Ok(Json(response))
     } else {
         Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+async fn health_check_all(
+    State(health): State<SharedHealth>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let is_all_healthy = health.is_all_healthy();
+    let status = health.to_json();
+
+    if is_all_healthy {
+        Ok(Json(status))
+    } else {
+        Err((StatusCode::SERVICE_UNAVAILABLE, Json(status)))
     }
 }
 
