@@ -1,31 +1,31 @@
-mod errors;
-mod config;
-mod utils;
-mod health;
-mod health_server;
-mod database;
-mod discord_api;
 mod bot;
-mod price_service;
-mod db_cleanup;
 mod charting;
-mod shanghai_price_service;
+mod config;
+mod database;
 #[cfg(test)]
 mod database_tests;
+mod db_cleanup;
+mod discord_api;
+mod errors;
+mod health;
+mod health_server;
+mod price_service;
+mod shanghai_price_service;
+mod utils;
 
-use errors::BotResult;
+use bot::start_bot;
 use config::BotConfig;
 use database::PriceDatabase;
 use db_cleanup::DatabaseCleanup;
-use bot::start_bot;
-use health::{HealthState, HealthAggregator};
+use errors::BotResult;
+use health::{HealthAggregator, HealthState};
 use health_server::start_health_server;
 
 use dotenv::dotenv;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
 const RECONNECT_DELAY_SECONDS: u64 = 30;
 
@@ -35,10 +35,10 @@ async fn main() -> BotResult<()> {
     tracing_subscriber::fmt()
         .with_env_filter("info,discord_bot=debug,discord_bot::database=info")
         .init();
-    
+
     info!("🚀 Starting RustyMcPriceface Unified Container...");
     dotenv().ok();
-    
+
     // Initialize shared database
     info!("📦 Initializing shared database...");
     let db = match PriceDatabase::new(config::DATABASE_PATH) {
@@ -110,7 +110,7 @@ async fn main() -> BotResult<()> {
         // Create health state for this bot and register with aggregator
         let health = Arc::new(HealthState::new(ticker.clone()));
         let health_clone = health.clone();
-        
+
         // Add to aggregator
         health_agg_clone.add_bot(health);
 
@@ -122,16 +122,26 @@ async fn main() -> BotResult<()> {
                 let emoji = utils::get_crypto_emoji(&ticker);
                 info!("{} Starting {} bot...", emoji, ticker);
 
-                match start_bot(bot_config.clone(), db_clone.clone(), health_clone.clone(), health_agg_clone.clone()).await {
+                match start_bot(
+                    bot_config.clone(),
+                    db_clone.clone(),
+                    health_clone.clone(),
+                    health_agg_clone.clone(),
+                )
+                .await
+                {
                     Ok(_) => {
                         error!("{} {} bot exited unexpectedly", emoji, ticker);
-                    },
+                    }
                     Err(e) => {
                         error!("{} {} bot crashed: {}", emoji, ticker, e);
                     }
                 }
 
-                error!("{} Restarting {} bot in {} seconds...", emoji, ticker, RECONNECT_DELAY_SECONDS);
+                error!(
+                    "{} Restarting {} bot in {} seconds...",
+                    emoji, ticker, RECONNECT_DELAY_SECONDS
+                );
                 sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
             }
         });
@@ -142,7 +152,10 @@ async fn main() -> BotResult<()> {
     info!("🏥 Starting health check server...");
     let health_for_server = health_aggregator.clone();
     tokio::spawn(async move {
-        start_health_server(health_for_server, 8080).await;
+        if let Err(e) = start_health_server(health_for_server, 8080).await {
+            error!("❌ Health server failed: {}", e);
+            panic!("Health server must start successfully for container health checks");
+        }
     });
 
     // Give health server time to start
@@ -158,6 +171,6 @@ async fn main() -> BotResult<()> {
     } else {
         warn!("⚠️ No bots to run. Exiting.");
     }
-    
+
     Ok(())
 }

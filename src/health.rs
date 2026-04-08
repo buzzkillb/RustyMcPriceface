@@ -208,6 +208,16 @@ impl HealthAggregator {
         false
     }
 
+    pub fn is_all_healthy(&self) -> bool {
+        if let Ok(bots) = self.bots.lock() {
+            if bots.is_empty() {
+                return true;
+            }
+            return bots.iter().all(|b| b.is_healthy());
+        }
+        false
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         let bots = match self.bots.lock() {
             Ok(bots) => bots,

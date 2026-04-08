@@ -33,6 +33,24 @@ pub enum BotError {
     Parse(String),
 }
 
+impl BotError {
+    pub fn user_message(&self) -> &'static str {
+        match self {
+            BotError::PriceNotFound(_) => "Price data not available for this asset",
+            BotError::InvalidInput(_) => "Invalid input provided",
+            BotError::Discord(_) => "Discord API error - please try again",
+            BotError::EnvVar(_) => "Configuration error - please contact support",
+            // Internal errors - don't expose details to users
+            BotError::Database(_)
+            | BotError::Http(_)
+            | BotError::Json(_)
+            | BotError::SystemTime(_)
+            | BotError::Io(_)
+            | BotError::Parse(_) => "An internal error occurred. Please try again later.",
+        }
+    }
+}
+
 impl From<std::env::VarError> for BotError {
     fn from(err: std::env::VarError) -> Self {
         BotError::EnvVar(err.to_string())
@@ -51,4 +69,4 @@ impl From<std::num::ParseFloatError> for BotError {
     }
 }
 
-pub type BotResult<T> = Result<T, BotError>; 
+pub type BotResult<T> = Result<T, BotError>;

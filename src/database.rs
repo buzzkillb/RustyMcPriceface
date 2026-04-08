@@ -33,6 +33,7 @@ impl PriceDatabase {
                          timestamp INTEGER NOT NULL,
                          created_at TEXT DEFAULT CURRENT_TIMESTAMP
                      );
+                     CREATE UNIQUE INDEX IF NOT EXISTS idx_prices_crypto_timestamp_unique ON prices(crypto_name, timestamp);
                      CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp ON prices(crypto_name, timestamp);
                      CREATE TABLE IF NOT EXISTS price_aggregates (
                          id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +54,7 @@ impl PriceDatabase {
         });
 
         let pool = Pool::builder()
-            .max_size(10) // Allow up to 10 concurrent connections
+            .max_size(4) // SQLite performs better with fewer connections
             .build(manager)
             .map_err(|e| {
                 BotError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
@@ -83,11 +84,10 @@ impl PriceDatabase {
         let conn = self.get_connection()?;
         let current_time = get_current_timestamp()?;
 
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO prices (crypto_name, price, timestamp) VALUES (?, ?, ?)",
+        conn.execute(
+            "INSERT OR REPLACE INTO prices (crypto_name, price, timestamp) VALUES (?1, ?2, ?3)",
+            [crypto_name, &price.to_string(), &current_time.to_string()],
         )?;
-
-        stmt.execute([crypto_name, &price.to_string(), &current_time.to_string()])?;
         debug!("Saved {} price to database: ${}", crypto_name, price);
         Ok(())
     }
@@ -163,7 +163,16 @@ impl PriceDatabase {
         ];
 
         for (seconds, label) in periods {
-            let time_ago = current_time - seconds;
+            // Guard against underflow if clock goes backwards
+            let time_ago = if current_time >= seconds {
+                current_time - seconds
+            } else {
+                debug!(
+                    "Clock appears to have gone backwards, skipping {} price lookup",
+                    label
+                );
+                continue;
+            };
 
             // Try to get price from appropriate data source based on age
             let old_price = if seconds <= 24 * 3600 {

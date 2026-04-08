@@ -4,8 +4,7 @@ use crate::discord_api::DiscordApi;
 use crate::errors::{BotError, BotResult};
 use crate::health::{HealthAggregator, HealthState};
 
-use crate::charting::{generate_price_chart, generate_shanghai_chart};
-use crate::price_service::fetch_shanghai_history;
+use crate::charting::generate_price_chart;
 use crate::price_service::PricesFile;
 use crate::utils::{format_price, get_current_timestamp, validate_crypto_name, validate_price};
 use serenity::{
@@ -166,67 +165,32 @@ impl Bot {
         // silverchart command always uses SILVER
         let crypto_name = "SILVER";
 
-        // SILVER uses database history, GOLD uses Shanghai API
-        if crypto_name == "SILVER" || crypto_name == "XAG" {
-            let history = self
-                .database
-                .get_price_history(crypto_name, 30)
-                .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
-
-            if history.is_empty() {
-                interaction.edit_response(&ctx.http, serenity::builder::EditInteractionResponse::new().content("❌ No historical data available yet (waiting for data to be collected)")).await
-                    .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
-                return Ok(());
-            }
-
-            let image_data = generate_price_chart(&history, crypto_name)
-                .map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
-            let attachment = CreateAttachment::bytes(image_data, "chart.png");
-            interaction
-                .edit_response(
-                    &ctx.http,
-                    serenity::builder::EditInteractionResponse::new()
-                        .content(format!("📊 30-Day Chart for {}", crypto_name))
-                        .new_attachment(attachment),
-                )
-                .await
-                .map_err(|e| BotError::Discord(format!("Failed to send chart response: {}", e)))?;
-            return Ok(());
-        }
-
-        // GOLD still uses Shanghai API
-        let api_symbol = match crypto_name {
-            "GOLD" | "XAU" => Some("XAU"),
-            _ => None,
-        };
-
-        let history = fetch_shanghai_history("1Y", api_symbol)
-            .await
+        let history = self
+            .database
+            .get_price_history(crypto_name, 30)
             .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
 
         if history.is_empty() {
             interaction
                 .edit_response(
                     &ctx.http,
-                    serenity::builder::EditInteractionResponse::new()
-                        .content("❌ No historical data available"),
+                    serenity::builder::EditInteractionResponse::new().content(
+                        "❌ No historical data available yet (waiting for data to be collected)",
+                    ),
                 )
                 .await
                 .map_err(|e| BotError::Discord(format!("Failed to send empty response: {}", e)))?;
             return Ok(());
         }
 
-        // Generate Chart
-        let image_data = generate_shanghai_chart(&history, crypto_name)
+        let image_data = generate_price_chart(&history, crypto_name)
             .map_err(|e| BotError::Discord(format!("Failed to generate chart: {}", e)))?;
-
-        // Send Response
         let attachment = CreateAttachment::bytes(image_data, "chart.png");
         interaction
             .edit_response(
                 &ctx.http,
                 serenity::builder::EditInteractionResponse::new()
-                    .content(format!("📊 1-Year Chart for {}", crypto_name))
+                    .content(format!("📊 30-Day Chart for {}", crypto_name))
                     .new_attachment(attachment),
             )
             .await
@@ -245,7 +209,9 @@ impl Bot {
         match self.database.get_price_history(crypto_name, 30) {
             Ok(history) => {
                 if history.is_empty() {
-                    let _ = channel_id.say(&ctx.http, "❌ No historical data available yet (waiting for data to be collected)").await;
+                    if let Err(e) = channel_id.say(&ctx.http, "❌ No historical data available yet (waiting for data to be collected)").await {
+                        warn!("Failed to send empty history message: {}", e);
+                    }
                     return Ok(());
                 }
                 match generate_price_chart(&history, crypto_name) {
@@ -341,30 +307,26 @@ impl Bot {
                 .or_else(|| all_prices.get("PAXG"));
 
             if let Some(gold) = gold_price {
-                let ratio = gold / current_price;
-                conversion_prices.push(format!("Ratio: {:.2} (Au/Ag)", ratio));
+                if current_price > 0.0 {
+                    let ratio = gold / current_price;
+                    conversion_prices.push(format!("Ratio: {:.2} (Au/Ag)", ratio));
+                }
             }
         }
 
-        // Add Shanghai Premium info
-        if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
-            // For SHANGHAISILVER, calculate premium from SILVER price
-            let (premium, premium_percent) = if crypto_name == "SHANGHAISILVER" {
-                if let Some(silver_price) = all_prices.get("SILVER") {
+        // Add Shanghai Premium info for SHANGHAISILVER only
+        // Note: SHANGHAI premium data is not available
+        if crypto_name == "SHANGHAISILVER" {
+            if let Some(silver_price) = all_prices.get("SILVER") {
+                if *silver_price > 0.0 {
                     let prem = current_price - silver_price;
                     let prem_pct = (prem / silver_price) * 100.0;
-                    (prem, prem_pct)
-                } else {
-                    (0.0, 0.0)
+                    response.push_str(&format!(
+                        "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
+                        prem, prem_pct
+                    ));
                 }
-            } else {
-                (0.0, 0.0) // For SHANGHAI, we'd need premium data from elsewhere
-            };
-
-            response.push_str(&format!(
-                "\n🇨🇳 Shanghai Premium: ${:.2} (+{:.2}%)",
-                premium, premium_percent
-            ));
+            }
         }
 
         // Add conversion prices to response if available
@@ -513,7 +475,7 @@ impl EventHandler for Bot {
                         Err(e) => {
                             error!("Price command failed: {}", e);
                             let data = CreateInteractionResponseMessage::new()
-                                .content(format!("❌ Error: {}", e));
+                                .content(format!("❌ Error: {}", e.user_message()));
                             let builder = CreateInteractionResponse::Message(data);
                             command_interaction
                                 .create_response(&ctx.http, builder)
@@ -530,7 +492,7 @@ impl EventHandler for Bot {
                                 &ctx.http,
                                 CreateInteractionResponse::Message(
                                     CreateInteractionResponseMessage::new()
-                                        .content(format!("❌ Error: {}", e)),
+                                        .content(format!("❌ Error: {}", e.user_message())),
                                 ),
                             )
                             .await;
@@ -690,7 +652,7 @@ impl EventHandler for Bot {
                     // Try to send an error message
                     if let Err(send_err) = msg
                         .channel_id
-                        .say(&ctx.http, format!("❌ Error: {}", e))
+                        .say(&ctx.http, format!("❌ Error: {}", e.user_message()))
                         .await
                     {
                         error!("Failed to send error message: {}", send_err);
@@ -764,7 +726,9 @@ impl EventHandler for Bot {
             lines.push("```".to_string());
 
             let message = lines.join("\n");
-            let _ = msg.channel_id.say(&ctx.http, message).await;
+            if let Err(e) = msg.channel_id.say(&ctx.http, message).await {
+                warn!("Failed to send health status message: {}", e);
+            }
             self.health.update_discord_timestamp();
         } else {
             debug!(
@@ -817,7 +781,10 @@ async fn read_prices_from_file() -> BotResult<PricesFile> {
         }
     }
 
-    unreachable!()
+    Err(BotError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Unexpected error in prices file read retry loop",
+    )))
 }
 
 /// Main price update loop with comprehensive error handling
@@ -879,8 +846,9 @@ async fn price_update_loop(
             };
 
             // Format the custom status with rotation
+            let update_interval_secs = config.update_interval.as_secs().max(1);
             let update_count = match get_current_timestamp() {
-                Ok(time) => (time / 12) % 4,
+                Ok(time) => (time / update_interval_secs) % 4,
                 Err(_) => 0,
             };
 
@@ -1016,11 +984,9 @@ async fn price_update_loop(
                 "Running periodic Discord connectivity test for {}",
                 crypto_name
             );
-            tokio::spawn({
-                let health_clone = health.clone();
-                async move {
-                    test_discord_connectivity(health_clone).await;
-                }
+            let health_clone = health.clone();
+            tokio::spawn(async move {
+                test_discord_connectivity(health_clone).await;
             });
         }
 
@@ -1055,25 +1021,47 @@ fn format_custom_status(
     arrow: &str,
     change_percent: f64,
 ) -> String {
+    // Check if current crypto's price is from fallback
+    let is_stale = shared_prices
+        .prices
+        .get(crypto_name)
+        .map(|p| p.is_fallback)
+        .unwrap_or(false);
+    let stale_indicator = if is_stale { " (stale)" } else { "" };
+
     // Calculate ticker price in terms of BTC, ETH, SOL
-    let btc_amount = current_price
-        / shared_prices
-            .prices
-            .get("BTC")
-            .map(|p| p.price)
-            .unwrap_or(45000.0);
-    let eth_amount = current_price
-        / shared_prices
-            .prices
-            .get("ETH")
-            .map(|p| p.price)
-            .unwrap_or(2800.0);
-    let sol_amount = current_price
-        / shared_prices
-            .prices
-            .get("SOL")
-            .map(|p| p.price)
-            .unwrap_or(95.0);
+    // Use fallback values only if key doesn't exist; guard against zero prices
+    let btc_price = shared_prices
+        .prices
+        .get("BTC")
+        .map(|p| p.price)
+        .unwrap_or(45000.0);
+    let eth_price = shared_prices
+        .prices
+        .get("ETH")
+        .map(|p| p.price)
+        .unwrap_or(2800.0);
+    let sol_price = shared_prices
+        .prices
+        .get("SOL")
+        .map(|p| p.price)
+        .unwrap_or(95.0);
+
+    let btc_amount = if btc_price > 0.0 {
+        current_price / btc_price
+    } else {
+        0.0
+    };
+    let eth_amount = if eth_price > 0.0 {
+        current_price / eth_price
+    } else {
+        0.0
+    };
+    let sol_amount = if sol_price > 0.0 {
+        current_price / sol_price
+    } else {
+        0.0
+    };
 
     match crypto_name {
         "BTC" => {
@@ -1084,12 +1072,15 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} Ξ", eth_amount),
                 2 => format!("{:.8} ◎", sol_amount),
-                3 => format!("{:.8} Ξ", eth_amount),
+                3 => format!("${:.2}", current_price),
                 _ => unreachable!(),
             }
         }
@@ -1101,7 +1092,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} ₿", btc_amount),
@@ -1118,7 +1112,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} ₿", btc_amount),
@@ -1137,7 +1134,11 @@ fn format_custom_status(
                 .map(|p| p.price);
 
             let ratio_str = if let Some(gold) = gold_price {
-                format!("Au/Ag: {:.2}", gold / current_price)
+                if current_price > 0.0 {
+                    format!("Au/Ag: {:.2}", gold / current_price)
+                } else {
+                    format!("{:.8} ₿", btc_amount)
+                }
             } else {
                 format!("{:.8} ₿", btc_amount) // Fallback
             };
@@ -1148,7 +1149,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => ratio_str,
@@ -1175,7 +1179,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
 
@@ -1206,7 +1213,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
 
@@ -1250,7 +1260,10 @@ fn format_custom_status(
                         format!("{} Building history", arrow)
                     } else {
                         let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
                     }
                 }
                 1 => format!("{:.8} ₿", btc_amount),
@@ -1395,7 +1408,10 @@ async fn get_individual_crypto_price(feed_id: &str) -> BotResult<f64> {
         }
     }
 
-    unreachable!()
+    Err(BotError::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Unexpected error in prices file read retry loop",
+    )))
 }
 
 /// Test Discord connectivity by making a simple API call

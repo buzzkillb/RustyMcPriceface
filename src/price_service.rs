@@ -17,6 +17,8 @@ pub struct PriceData {
     pub premium: Option<f64>,
     pub premium_percent: Option<f64>,
     pub source: Option<String>,
+    #[serde(default)]
+    pub is_fallback: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -99,6 +101,18 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
                                                 .and_then(|e| e.as_i64())
                                                 .unwrap_or(0);
                                             let real_price = price as f64 * 10f64.powi(expo as i32);
+
+                                            if real_price <= 0.0
+                                                || real_price.is_nan()
+                                                || real_price.is_infinite()
+                                            {
+                                                error!(
+                                                    "Invalid price value from Pyth API: {}",
+                                                    real_price
+                                                );
+                                                return Err("Invalid price value from API".into());
+                                            }
+
                                             return Ok(real_price);
                                         }
                                     }
@@ -132,7 +146,7 @@ async fn get_crypto_price(feed_id: &str) -> Result<f64, Box<dyn std::error::Erro
         }
     }
 
-    unreachable!()
+    Err("Unexpected error in price fetch retry loop".into())
 }
 
 pub async fn fetch_shanghai_history(
@@ -235,6 +249,11 @@ async fn fetch_yahoo_price(
                                     .and_then(|p| p.as_f64())
                                     .ok_or("Missing regularMarketPrice")?;
 
+                                if price <= 0.0 || price.is_nan() || price.is_infinite() {
+                                    error!("Invalid Yahoo price value: {}", price);
+                                    return Err("Invalid price value from Yahoo API".into());
+                                }
+
                                 // Parse timestamp if available, else use current
                                 let timestamp = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)?
@@ -246,6 +265,7 @@ async fn fetch_yahoo_price(
                                     premium: None,
                                     premium_percent: None,
                                     source: Some("yahoo".to_string()),
+                                    is_fallback: false,
                                 });
                             }
                         }
@@ -286,6 +306,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                         premium: None,
                         premium_percent: None,
                         source: None,
+                        is_fallback: false,
                     },
                 );
                 info!("Fetched {} price: ${:.6}", crypto, price);
@@ -294,10 +315,10 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                 error!("Failed to fetch {} price: {}", crypto, e);
                 warn!("⚠️ Using FALLBACK price for {} - API may be down!", crypto);
                 let default_price = match crypto.as_str() {
-                    "BTC" => 45000.0,
-                    "ETH" => 2800.0,
-                    "SOL" => 95.0,
-                    "WIF" => 2.0,
+                    "BTC" => 100000.0,
+                    "ETH" => 3500.0,
+                    "SOL" => 150.0,
+                    "WIF" => 2.5,
                     _ => 1.0,
                 };
                 prices.insert(
@@ -308,6 +329,7 @@ async fn fetch_all_prices() -> Result<PricesFile, Box<dyn std::error::Error + Se
                         premium: None,
                         premium_percent: None,
                         source: None,
+                        is_fallback: true,
                     },
                 );
             }
@@ -374,7 +396,11 @@ pub async fn fetch_shanghai_silver_price(
     let (shanghai_spot, western_spot) = fetch_goldsilver_ai_prices().await?;
 
     let premium = shanghai_spot - western_spot;
-    let premium_percent = (premium / western_spot) * 100.0;
+    let premium_percent = if western_spot > 0.0 {
+        (premium / western_spot) * 100.0
+    } else {
+        0.0
+    };
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -391,6 +417,7 @@ pub async fn fetch_shanghai_silver_price(
         premium: Some(premium),
         premium_percent: Some(premium_percent),
         source: Some("shanghaisilver_spot".to_string()),
+        is_fallback: false,
     })
 }
 
@@ -448,23 +475,19 @@ fn extract_first_number_after(html: &str, prefix: &str) -> Option<f64> {
     if let Some(pos) = html.find(prefix) {
         let after_prefix = &html[pos + prefix.len()..];
 
-        // Use regex to find first number after prefix
-        let re = regex::Regex::new(r"-?\d+\.?\d*").ok()?;
+        // Use safer regex pattern to avoid ReDoS - requires at least one digit
+        let re = regex::Regex::new(r"-?\d+(?:\.\d+)?").ok()?;
         if let Some(m) = re.find(after_prefix) {
-            return m.as_str().parse::<f64>().ok();
+            let num_str = m.as_str();
+            // Skip if it's just a decimal point or empty
+            if num_str.is_empty() || num_str == "." {
+                return None;
+            }
+            return num_str.parse::<f64>().ok();
         }
     }
 
-    // Fallback: find all numbers and return the largest (reasonable for prices)
-    let re = regex::Regex::new(r"-?\d+\.?\d*").ok()?;
-    let numbers: Vec<f64> = re
-        .find_iter(html)
-        .filter_map(|m| m.as_str().parse::<f64>().ok())
-        .collect();
-
-    numbers
-        .into_iter()
-        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    None
 }
 
 pub async fn run(

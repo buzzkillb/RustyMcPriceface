@@ -173,10 +173,15 @@ pub fn generate_price_chart(
             .map(|(_, p)| *p)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        // Add padding
-        let range_padding = (max_price - min_price) * 0.05;
-        let y_min = min_price - range_padding;
-        let y_max = max_price + range_padding;
+        // Ensure minimum range for Y axis
+        let price_range = (max_price - min_price).abs();
+        let (y_min, y_max) = if price_range < 0.0001 {
+            (min_price - 1.0, max_price + 1.0)
+        } else {
+            // Add padding
+            let range_padding = price_range * 0.05;
+            (min_price - range_padding, max_price + range_padding)
+        };
 
         let mut chart = ChartBuilder::on(&root)
             .caption(title, text_style)
