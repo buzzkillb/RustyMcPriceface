@@ -1,7 +1,16 @@
 use crate::health::HealthAggregator;
-use axum::{extract::State, http::StatusCode, response::Json, routing::get, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Json, Response},
+    routing::get,
+    Router,
+};
+use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::time::timeout;
 use tracing::{error, info};
 
 pub type SharedHealth = Arc<HealthAggregator>;
@@ -30,32 +39,56 @@ pub async fn start_health_server(
     Ok(())
 }
 
-async fn health_check(
-    State(health): State<SharedHealth>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let is_healthy = health.is_healthy();
+async fn health_check(State(health): State<SharedHealth>) -> Response {
+    let health = health.clone();
+    let result = timeout(Duration::from_secs(5), async move { health.is_healthy() }).await;
+
+    let is_healthy = result.unwrap_or(false);
 
     let response = serde_json::json!({
         "healthy": is_healthy
     });
 
     if is_healthy {
-        Ok(Json(response))
+        (StatusCode::OK, Json(response)).into_response()
     } else {
-        Err(StatusCode::SERVICE_UNAVAILABLE)
+        (StatusCode::SERVICE_UNAVAILABLE, Json(response)).into_response()
     }
 }
 
-async fn health_check_all(
-    State(health): State<SharedHealth>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let is_all_healthy = health.is_all_healthy();
-    let status = health.to_json();
+struct HealthCheckAllResponse {
+    is_all_healthy: bool,
+    status: serde_json::Value,
+}
 
-    if is_all_healthy {
-        Ok(Json(status))
-    } else {
-        Err((StatusCode::SERVICE_UNAVAILABLE, Json(status)))
+impl IntoResponse for HealthCheckAllResponse {
+    fn into_response(self) -> Response {
+        if self.is_all_healthy {
+            (StatusCode::OK, Json(self.status)).into_response()
+        } else {
+            (StatusCode::SERVICE_UNAVAILABLE, Json(self.status)).into_response()
+        }
+    }
+}
+
+async fn health_check_all(State(health): State<SharedHealth>) -> HealthCheckAllResponse {
+    let health = health.clone();
+    let result = timeout(Duration::from_secs(5), async move {
+        let is_all_healthy = health.is_all_healthy();
+        let status = health.to_json();
+        (is_all_healthy, status)
+    })
+    .await;
+
+    match result {
+        Ok((is_all_healthy, status)) => HealthCheckAllResponse {
+            is_all_healthy,
+            status,
+        },
+        Err(_) => HealthCheckAllResponse {
+            is_all_healthy: false,
+            status: json!({"error": "health check timeout"}),
+        },
     }
 }
 
