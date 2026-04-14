@@ -112,7 +112,7 @@ async fn main() -> BotResult<()> {
         let health_clone = health.clone();
 
         // Add to aggregator
-        health_agg_clone.add_bot(health);
+        health_agg_clone.add_bot(health).await;
 
         info!("🚀 Spawning bot for {}...", ticker);
 

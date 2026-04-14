@@ -41,7 +41,11 @@ pub async fn start_health_server(
 
 async fn health_check(State(health): State<SharedHealth>) -> Response {
     let health = health.clone();
-    let result = timeout(Duration::from_secs(5), async move { health.is_healthy() }).await;
+    let result = timeout(
+        Duration::from_secs(5),
+        async move { health.is_healthy().await },
+    )
+    .await;
 
     let is_healthy = result.unwrap_or(false);
 
@@ -74,8 +78,8 @@ impl IntoResponse for HealthCheckAllResponse {
 async fn health_check_all(State(health): State<SharedHealth>) -> HealthCheckAllResponse {
     let health = health.clone();
     let result = timeout(Duration::from_secs(5), async move {
-        let is_all_healthy = health.is_all_healthy();
-        let status = health.to_json();
+        let is_all_healthy = health.is_all_healthy().await;
+        let status = health.to_json().await;
         (is_all_healthy, status)
     })
     .await;

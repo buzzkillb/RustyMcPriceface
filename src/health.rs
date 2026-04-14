@@ -2,6 +2,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 /// Health check state shared across the application
 #[derive(Debug, Clone)]
@@ -182,34 +183,24 @@ impl HealthState {
 /// Returns healthy if at least one bot is functioning
 #[derive(Debug, Clone)]
 pub struct HealthAggregator {
-    bots: Arc<std::sync::Mutex<Vec<Arc<HealthState>>>>,
+    bots: Arc<Mutex<Vec<Arc<HealthState>>>>,
 }
 
 impl HealthAggregator {
     pub fn new() -> Self {
         Self {
-            bots: Arc::new(std::sync::Mutex::new(Vec::new())),
+            bots: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    pub fn add_bot(&self, health: Arc<HealthState>) {
-        if let Ok(mut bots) = self.bots.lock() {
+    pub async fn add_bot(&self, health: Arc<HealthState>) {
+        if let Ok(mut bots) = self.bots.lock().await {
             bots.push(health);
         }
     }
 
-    pub fn is_healthy(&self) -> bool {
-        if let Ok(bots) = self.bots.lock() {
-            if bots.is_empty() {
-                return true;
-            }
-            return bots.iter().any(|b| b.is_healthy());
-        }
-        false
-    }
-
-    pub fn is_all_healthy(&self) -> bool {
-        if let Ok(bots) = self.bots.lock() {
+    pub async fn is_healthy(&self) -> bool {
+        if let Ok(bots) = self.bots.lock().await {
             if bots.is_empty() {
                 return true;
             }
@@ -218,8 +209,18 @@ impl HealthAggregator {
         false
     }
 
-    pub fn to_json(&self) -> serde_json::Value {
-        let bots = match self.bots.lock() {
+    pub async fn is_all_healthy(&self) -> bool {
+        if let Ok(bots) = self.bots.lock().await {
+            if bots.is_empty() {
+                return true;
+            }
+            return bots.iter().all(|b| b.is_healthy());
+        }
+        false
+    }
+
+    pub async fn to_json(&self) -> serde_json::Value {
+        let bots = match self.bots.lock().await {
             Ok(bots) => bots,
             Err(_) => return json!({"error": "lock poisoned"}),
         };

@@ -517,7 +517,7 @@ impl EventHandler for Bot {
                             .create_response(&ctx.http, builder)
                             .await
                     } else if self.config.crypto_name == "BTC" {
-                        let status = self.health_aggregator.to_json();
+                        let status = self.health_aggregator.to_json().await;
                         let total_bots = status
                             .get("total_bots")
                             .and_then(|v| v.as_u64())
@@ -692,7 +692,7 @@ impl EventHandler for Bot {
                 .await;
         } else if is_status {
             debug!("Received !status command from {}", msg.author.name);
-            let status = self.health_aggregator.to_json();
+            let status = self.health_aggregator.to_json().await;
             let total_bots = status
                 .get("total_bots")
                 .and_then(|v| v.as_u64())
