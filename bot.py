@@ -57,6 +57,16 @@ def load_bot_configs() -> list[BotConfig]:
     return configs
 
 
+DISPLAY_NAME_MAP = {
+    "SHANGHAISILVER": "SSILVER",
+}
+
+
+def get_display_name(crypto: str) -> str:
+    """Get display name for a ticker, using shorter aliases where defined."""
+    return DISPLAY_NAME_MAP.get(crypto.upper(), crypto.upper())
+
+
 def format_price(price: float) -> str:
     """Format price for display."""
     if price >= 1000:
@@ -155,7 +165,7 @@ class PriceBot(discord.Client):
                 return
             
             formatted_price = format_price(price)
-            nickname = f"{display_crypto.upper()} {formatted_price}"
+            nickname = f"{get_display_name(display_crypto)} {formatted_price}"
             
             # Cycle through: BTC value, ETH value, SOL value, 1h%
             tickers = ["BTC", "ETH", "SOL"]

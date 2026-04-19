@@ -64,7 +64,7 @@ Get Pyth Network feed IDs from https://insights.pyth.network/price-feeds
 
 ### Special Tickers
 - DXY: Fetched via Yahoo Finance (DX-Y.NYB)
-- SSILVER: Fetched via GoldSilver.ai scraping
+- SSILVER: Fetched via GoldSilver.ai scraping (displays as "SSILVER" in nicknames)
 - GOLD, SILVER: Fetched via Pyth Network
 
 ### Optional Settings
