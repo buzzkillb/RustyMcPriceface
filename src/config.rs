@@ -68,7 +68,7 @@ impl BotConfig {
 }
 
 /// Constants for the application
-pub const DATABASE_PATH: &str = "/app/shared/prices.db";
+pub const DATABASE_URL: &str = "postgres://postgres:postgres@localhost:5432/pricebot";
 
 /// Default update interval in seconds
 pub const UPDATE_INTERVAL_SECONDS: u64 = 12;

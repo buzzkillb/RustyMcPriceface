@@ -41,7 +41,7 @@ async fn main() -> BotResult<()> {
 
     // Initialize shared database
     info!("📦 Initializing shared database...");
-    let db = match PriceDatabase::new(config::DATABASE_PATH) {
+    let db = match PriceDatabase::new(&config::DATABASE_URL).await {
         Ok(db) => Arc::new(db),
         Err(e) => {
             error!("Failed to initialize database: {}", e);

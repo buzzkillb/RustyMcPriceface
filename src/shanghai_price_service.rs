@@ -71,7 +71,7 @@ pub async fn run(
                         price_data.premium_percent.unwrap_or(0.0)
                     );
 
-                    if let Err(e) = database.save_price(CRYPTO_NAME, price_data.price) {
+                    if let Err(e) = database.save_price(CRYPTO_NAME, price_data.price).await {
                         error!("❌ Failed to save Shanghai Silver price to database: {}", e);
                     } else {
                         info!("💾 Saved Shanghai Silver price to database");

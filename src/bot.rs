@@ -139,14 +139,16 @@ impl Bot {
         debug!("Price command called for: {}", crypto_name);
 
         // Get current price from database
-        let current_price = self.database.get_latest_price(&crypto_name)?;
+        let current_price = self.database.get_latest_price(&crypto_name).await?;
         validate_price(current_price)?;
 
         // Get all prices from database for conversions
-        let all_prices = self.database.get_all_latest_prices()?;
+        let all_prices = self.database.get_all_latest_prices().await?;
 
         // Build response using helper
-        let response = self.build_price_response(&crypto_name, current_price, &all_prices)?;
+        let response = self
+            .build_price_response(&crypto_name, current_price, &all_prices)
+            .await?;
 
         Ok(response)
     }
@@ -168,6 +170,7 @@ impl Bot {
         let history = self
             .database
             .get_price_history(crypto_name, 30)
+            .await
             .map_err(|e| BotError::Discord(format!("Failed to fetch history: {}", e)))?;
 
         if history.is_empty() {
@@ -206,7 +209,7 @@ impl Bot {
         crypto_name: &str,
         title: &str,
     ) -> BotResult<()> {
-        match self.database.get_price_history(crypto_name, 30) {
+        match self.database.get_price_history(crypto_name, 30).await {
             Ok(history) => {
                 if history.is_empty() {
                     if let Err(e) = channel_id.say(&ctx.http, "❌ No historical data available yet (waiting for data to be collected)").await {
@@ -247,7 +250,7 @@ impl Bot {
 
     /// Build a price response string with conversions and additional info
     /// This is the core logic shared between slash commands and message commands
-    fn build_price_response(
+    async fn build_price_response(
         &self,
         crypto_name: &str,
         current_price: f64,
@@ -261,6 +264,7 @@ impl Bot {
         let change_info = self
             .database
             .get_price_changes(crypto_name, current_price)
+            .await
             .unwrap_or_else(|e| {
                 error!("Failed to get price changes for {}: {}", crypto_name, e);
                 " 🔄 Building history".to_string()
@@ -348,14 +352,16 @@ impl Bot {
         debug!("Message price command called for: {}", crypto_name);
 
         // Get current price from database
-        let current_price = self.database.get_latest_price(&crypto_name)?;
+        let current_price = self.database.get_latest_price(&crypto_name).await?;
         validate_price(current_price)?;
 
         // Get all prices from database for conversions
-        let all_prices = self.database.get_all_latest_prices()?;
+        let all_prices = self.database.get_all_latest_prices().await?;
 
         // Build response using helper
-        let response = self.build_price_response(&crypto_name, current_price, &all_prices)?;
+        let response = self
+            .build_price_response(&crypto_name, current_price, &all_prices)
+            .await?;
 
         // Send the response to the channel
         channel_id
@@ -837,7 +843,9 @@ async fn price_update_loop(
             }
         };
 
-        let (arrow, change_percent) = database.get_price_indicator(crypto_name, current_price);
+        let (arrow, change_percent) = database
+            .get_price_indicator(crypto_name, current_price)
+            .await;
 
         let nickname = if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
             format!("SILVER {}", format_price(current_price))
@@ -877,7 +885,7 @@ async fn price_update_loop(
         ctx.set_activity(Some(ActivityData::playing(custom_status.clone())));
         debug!("Updated activity status");
 
-        if let Err(e) = database.save_price(crypto_name, current_price) {
+        if let Err(e) = database.save_price(crypto_name, current_price).await {
             error!("Failed to save price to database: {}", e);
         } else {
             health.update_db_timestamp();
@@ -910,7 +918,7 @@ async fn price_update_loop(
             health.increment_gateway_failures();
         }
 
-        database.maybe_cleanup();
+        database.maybe_cleanup().await;
 
         if last_connectivity_check.elapsed() >= CONNECTIVITY_CHECK_INTERVAL {
             last_connectivity_check = std::time::Instant::now();
@@ -1255,7 +1263,7 @@ async fn get_crypto_price(config: &BotConfig, database: &Arc<PriceDatabase>) -> 
     // For SHANGHAISILVER, read directly from database (not in prices.json)
     if config.crypto_name == "SHANGHAISILVER" {
         debug!("Getting SHANGHAISILVER price from database");
-        match database.get_latest_price(&config.crypto_name) {
+        match database.get_latest_price(&config.crypto_name).await {
             Ok(price) if price > 0.0 => {
                 debug!("Got SHANGHAISILVER price from database: {}", price);
                 validate_price(price)?;

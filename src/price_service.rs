@@ -539,7 +539,7 @@ pub async fn run(
 
                 // Store in SQLite database using shared pool
                 for (crypto, price_data) in &prices.prices {
-                    if let Err(e) = database.save_price(crypto, price_data.price) {
+                    if let Err(e) = database.save_price(crypto, price_data.price).await {
                         error!("Failed to store {} price in database: {}", crypto, e);
                     }
                 }
