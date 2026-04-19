@@ -1026,7 +1026,7 @@ fn format_custom_status(
     match crypto_name {
         "BTC" => {
             // For BTC bot, show ETH and SOL amounts, skip BTC/BTC
-            match update_count {
+            match update_count % 4 {
                 0 => {
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
@@ -1040,13 +1040,12 @@ fn format_custom_status(
                 }
                 1 => format!("{:.8} Ξ", eth_amount),
                 2 => format!("{:.8} ◎", sol_amount),
-                3 => format!("${:.2}", current_price),
-                _ => unreachable!(),
+                _ => format!("${:.2}", current_price),
             }
         }
         "ETH" => {
             // For ETH bot, show BTC and SOL amounts, skip ETH/ETH
-            match update_count {
+            match update_count % 4 {
                 0 => {
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
@@ -1060,13 +1059,12 @@ fn format_custom_status(
                 }
                 1 => format!("{:.8} ₿", btc_amount),
                 2 => format!("{:.8} ◎", sol_amount),
-                3 => format!("{:.8} ₿", btc_amount),
-                _ => unreachable!(),
+                _ => format!("{:.8} ₿", btc_amount),
             }
         }
         "SOL" => {
             // For SOL bot, show BTC and ETH amounts, skip SOL/SOL
-            match update_count {
+            match update_count % 4 {
                 0 => {
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
@@ -1080,8 +1078,7 @@ fn format_custom_status(
                 }
                 1 => format!("{:.8} ₿", btc_amount),
                 2 => format!("{:.8} Ξ", eth_amount),
-                3 => format!("{:.8} ₿", btc_amount),
-                _ => unreachable!(),
+                _ => format!("{:.8} ₿", btc_amount),
             }
         }
         "SILVER" | "XAG" => {
@@ -1103,7 +1100,7 @@ fn format_custom_status(
                 format!("{:.8} ₿", btc_amount) // Fallback
             };
 
-            match update_count {
+            match update_count % 4 {
                 0 => {
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
@@ -1117,13 +1114,12 @@ fn format_custom_status(
                 }
                 1 => ratio_str,
                 2 => format!("{:.8} ₿", btc_amount),
-                3 => format!("{:.8} Ξ", eth_amount),
-                _ => unreachable!(),
+                _ => format!("{:.8} Ξ", eth_amount),
             }
         }
         "SHANGHAI" => {
             // For Shanghai bot, scroll through Premium and Premium Percent
-            match update_count {
+            match update_count % 4 {
                 0 | 3 => {
                     // Show arrow/building history on 0 and 3 (half the time, or custom cycle)
                     // User asked for "always update price... and then cycle 2 and 3 would be underneath"
@@ -1163,11 +1159,21 @@ fn format_custom_status(
                         .unwrap_or(0.0);
                     format!("Prem: {:.2}%", premium_pct)
                 }
-                _ => unreachable!(),
+                _ => {
+                    if change_percent == 0.0 && arrow == "🔄" {
+                        format!("{} Building history", arrow)
+                    } else {
+                        let change_sign = if change_percent >= 0.0 { "+" } else { "" };
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
+                    }
+                }
             }
         }
         "SHANGHAISILVER" => {
-            match update_count {
+            match update_count % 4 {
                 0 | 3 => {
                     if change_percent == 0.0 && arrow == "🔄" {
                         format!("{} Building history", arrow)
@@ -1209,7 +1215,17 @@ fn format_custom_status(
                     };
                     format!("Prem: {:.2}%", premium_pct)
                 }
-                _ => unreachable!(),
+                _ => {
+                    if change_percent == 0.0 && arrow == "🔄" {
+                        format!("{} Building history", arrow)
+                    } else {
+                        let change_sign = if change_percent >= 0.0 { "+" } else { "" };
+                        format!(
+                            "{} {}{:.2}% (1h){}",
+                            arrow, change_sign, change_percent, stale_indicator
+                        )
+                    }
+                }
             }
         }
         _ => {
