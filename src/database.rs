@@ -24,8 +24,10 @@ impl PriceDatabase {
         let manager = SqliteConnectionManager::file(db_path).with_init(|c| {
             c.execute_batch(
                 "PRAGMA journal_mode = WAL;  -- Enable WAL mode
-                     PRAGMA busy_timeout = 30000;  -- Set busy timeout to 30s
+                     PRAGMA busy_timeout = 60000;  -- Set busy timeout to 60s
                      PRAGMA synchronous = NORMAL; -- Faster sync
+                     PRAGMA cache_size = -64000; -- 64MB cache
+                     PRAGMA temp_store = MEMORY; -- Store temp tables in memory
                      CREATE TABLE IF NOT EXISTS prices (
                          id INTEGER PRIMARY KEY AUTOINCREMENT,
                          crypto_name TEXT NOT NULL,
@@ -54,7 +56,8 @@ impl PriceDatabase {
         });
 
         let pool = Pool::builder()
-            .max_size(4) // SQLite performs better with fewer connections
+            .max_size(16) // Increased for more concurrent readers
+            .min_idle(Some(4)) // Keep some connections ready
             .build(manager)
             .map_err(|e| {
                 BotError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
