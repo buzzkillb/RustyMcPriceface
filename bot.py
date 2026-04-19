@@ -130,7 +130,7 @@ class PriceBot(discord.Client):
                 return
             
             formatted_price = format_price(price)
-            nickname = f"{display_crypto} {formatted_price}"
+            nickname = f"{display_crypto.upper()} {formatted_price}"
             
             change_sign = "+" if change_percent >= 0 else ""
             status_text = f"{change_sign}{change_percent:.2f}% (1h)"
