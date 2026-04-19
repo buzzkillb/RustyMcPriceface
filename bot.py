@@ -122,20 +122,23 @@ class PriceBot(discord.Client):
             return None
         return price
 
-    async def get_btc_price(self) -> Optional[float]:
-        """Get current BTC price for conversion."""
-        try:
-            btc_price = await self.price_service.get_price("BTC")
-            if btc_price and btc_price > 0:
-                return btc_price
-            # Fallback to database
-            db_price = await self.db.get_latest_price("BTC")
-            return db_price
-        except Exception as e:
-            logger.debug(f"Could not get BTC price: {e}")
-            return None
+    async def get_conversion_prices(self) -> dict:
+        """Get BTC, ETH, SOL prices for conversion."""
+        prices = {}
+        for ticker in ["BTC", "ETH", "SOL"]:
+            try:
+                p = await self.price_service.get_price(ticker)
+                if p and p > 0:
+                    prices[ticker] = p
+                else:
+                    db_p = await self.db.get_latest_price(ticker)
+                    if db_p and db_p > 0:
+                        prices[ticker] = db_p
+            except Exception as e:
+                logger.debug(f"Could not get {ticker} price: {e}")
+        return prices
 
-    async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, btc_price: Optional[float], show_btc: bool):
+    async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, conversions: dict, show_index: int):
         """Update nickname and custom status."""
         try:
             guilds = self.guilds
@@ -145,10 +148,13 @@ class PriceBot(discord.Client):
             formatted_price = format_price(price)
             nickname = f"{display_crypto.upper()} {formatted_price}"
             
-            # Cycle between BTC value and 1h percentage
-            if show_btc and btc_price and btc_price > 0 and display_crypto.upper() != "BTC":
-                btc_value = price / btc_price
-                status_text = f"{btc_value:.6f} BTC"
+            # Cycle through: BTC value, ETH value, SOL value, 1h%
+            tickers = ["BTC", "ETH", "SOL"]
+            ticker = tickers[show_index % 3]
+            
+            if ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
+                converted = price / conversions[ticker]
+                status_text = f"{converted:.6f} {ticker}"
             else:
                 change_sign = "+" if change_percent >= 0 else ""
                 status_text = f"{change_sign}{change_percent:.2f}% (1h)"
@@ -178,8 +184,8 @@ class PriceBot(discord.Client):
             interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
             current_price = None
             current_change = 0.0
-            btc_price = None
-            show_btc = False  # Toggle for cycling
+            conversions = {}
+            show_index = 0  # Cycles: 0=BTC, 1=ETH, 2=SOL, 3=1h%, then repeats
             
             while True:
                 try:
@@ -188,19 +194,18 @@ class PriceBot(discord.Client):
                         await self.db.save_price(self.config.crypto, price)
                         current_price = price
                         current_change = await self.get_1h_change(self.config.crypto)
-                        btc_price = await self.get_btc_price()
+                        conversions = await self.get_conversion_prices()
                     
                     if current_price:
                         await self.update_discord_presence(
                             current_price, 
                             current_change, 
                             self.config.crypto,
-                            btc_price,
-                            show_btc
+                            conversions,
+                            show_index
                         )
-                        # Toggle for next iteration
-                        show_btc = not show_btc
-                        logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}% BTC={show_btc}")
+                        show_index += 1
+                        logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}%")
                         
                 except Exception as e:
                     logger.error(f"Failed to update for {self.config.name}: {e}")
