@@ -26,8 +26,6 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-CYCLE_CRYPTOS = ["BTC", "ETH", "SOL"]
-
 
 @dataclass
 class BotConfig:
@@ -82,7 +80,6 @@ class PriceBot(discord.Client):
         self.db = db
         self.price_service = price_service
         self.tree = app_commands.CommandTree(self)
-        self.current_cycle_index = 0
         
     async def setup_hook(self):
         await self.tree.sync()
@@ -140,31 +137,20 @@ class PriceBot(discord.Client):
         """Background task to update price and Discord presence periodically."""
         async def update_loop():
             interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
-            cycle_interval = int(os.environ.get("CYCLE_INTERVAL_SECONDS", "30"))
-            last_cycle_time = 0
-            current_crypto = CYCLE_CRYPTOS[self.current_cycle_index]
             current_price = None
             current_change = 0.0
             
             while True:
                 try:
-                    current_time = time.time()
-                    
-                    if current_time - last_cycle_time >= cycle_interval:
-                        self.current_cycle_index = (self.current_cycle_index + 1) % len(CYCLE_CRYPTOS)
-                        current_crypto = CYCLE_CRYPTOS[self.current_cycle_index]
-                        last_cycle_time = current_time
-                        logger.debug(f"Cycling to {current_crypto} for {self.config.name}")
-                    
-                    price = await self.price_service.get_price(current_crypto)
+                    price = await self.price_service.get_price(self.config.crypto)
                     if price and price > 0:
-                        await self.db.save_price(current_crypto, price)
+                        await self.db.save_price(self.config.crypto, price)
                         current_price = price
-                        current_change = await self.get_1h_change(current_crypto)
+                        current_change = await self.get_1h_change(self.config.crypto)
                     
                     if current_price:
-                        await self.update_discord_presence(current_price, current_change, current_crypto)
-                        logger.debug(f"Updated {self.config.name}: {current_crypto} ${current_price} {current_change:+.2f}%")
+                        await self.update_discord_presence(current_price, current_change, self.config.crypto)
+                        logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}%")
                         
                 except Exception as e:
                     logger.error(f"Failed to update for {self.config.name}: {e}")
