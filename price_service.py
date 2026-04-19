@@ -90,6 +90,41 @@ class PriceService:
                 return None
         return None
     
+    async def get_yahoo_price(self, ticker: str) -> Optional[float]:
+        """Fetch price from Yahoo Finance API."""
+        try:
+            session = await self._get_session()
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; RustyMcPriceface/1.0)",
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Yahoo returned {resp.status} for {ticker}")
+                    return None
+                
+                data = await resp.json()
+                
+                # Extract price from Yahoo Finance JSON structure
+                result = data.get("chart", {}).get("result", [])
+                if not result:
+                    logger.warning(f"No result from Yahoo for {ticker}")
+                    return None
+                
+                meta = result[0].get("meta", {})
+                price = meta.get("regularMarketPrice")
+                
+                if price:
+                    logger.info(f"Yahoo {ticker}: {price}")
+                    return float(price)
+                
+                logger.warning(f"No price in Yahoo response for {ticker}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch {ticker} from Yahoo: {e}")
+            return None
+    
     async def get_price(self, crypto: str) -> Optional[float]:
         """Get price for a single cryptocurrency."""
         crypto = crypto.upper()
@@ -97,6 +132,10 @@ class PriceService:
         # Special handling for Shanghai Silver (not in Pyth feeds)
         if crypto == "SHANGHAISILVER":
             return await self.get_shanghai_silver_price()
+        
+        # Special handling for DXY (Yahoo Finance)
+        if crypto == "DXY":
+            return await self.get_yahoo_price("DX-Y.NYB")
         
         if crypto not in self.feeds:
             logger.warning(f"No feed ID for {crypto}")
