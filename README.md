@@ -112,7 +112,7 @@ Generates a price chart from historical data.
 |--------|------|---------|-------------|
 | hours  | int  | 24      | Number of hours of data to display (24, 48, 168, 720, etc.) |
 
-**Available for:** BTC, ETH, SOL, SSILVER, DXY bots
+**Available for:** All bots (shows chart for the bot's specific ticker)
 
 ### /price current
 Shows the current price with conversions and percentage changes.

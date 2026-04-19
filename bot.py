@@ -88,10 +88,8 @@ class PriceBot(discord.Client):
         price_group = PriceGroup(self.db, self.price_service, self.config.crypto)
         self.tree.add_command(price_group)
         
-        crypto_name = self.config.crypto.upper()
-        if crypto_name in ["BTC", "ETH", "SOL", "SSILVER", "DXY"]:
-            chart_group = ChartGroup(self.db, self.chart_service, crypto_name)
-            self.tree.add_command(chart_group)
+        chart_group = ChartGroup(self.db, self.chart_service, self.config.crypto)
+        self.tree.add_command(chart_group)
         
         await self.tree.sync()
         logger.info(f"Synced commands for {self.config.name}")
