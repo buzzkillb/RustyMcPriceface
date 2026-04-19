@@ -130,7 +130,7 @@ class PriceService:
         crypto = crypto.upper()
         
         # Special handling for Shanghai Silver (not in Pyth feeds)
-        if crypto == "SHANGHAISILVER":
+        if crypto == "SSILVER":
             return await self.get_shanghai_silver_price()
         
         # Special handling for DXY (Yahoo Finance)

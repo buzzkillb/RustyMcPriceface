@@ -3,6 +3,7 @@ Discord Bot for cryptocurrency price tracking.
 Uses discord.py, asyncpg, and Pyth Network API.
 """
 import asyncio
+import io
 import logging
 import os
 import sys
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 
 from database import Database
 from price_service import PriceService
+from chart_service import ChartService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,15 +75,24 @@ def calculate_change_percent(current: float, previous: float) -> float:
 
 
 class PriceBot(discord.Client):
-    def __init__(self, config: BotConfig, db: Database, price_service: PriceService):
+    def __init__(self, config: BotConfig, db: Database, price_service: PriceService, chart_service: ChartService):
         intents = discord.Intents.default()
         super().__init__(intents=intents)
         self.config = config
         self.db = db
         self.price_service = price_service
+        self.chart_service = chart_service
         self.tree = app_commands.CommandTree(self)
         
     async def setup_hook(self):
+        price_group = PriceGroup(self.db, self.price_service)
+        self.tree.add_command(price_group)
+        
+        crypto_name = self.config.crypto.upper()
+        if crypto_name in ["BTC", "ETH", "SOL", "SSILVER", "DXY"]:
+            chart_group = ChartGroup(self.db, self.chart_service, crypto_name)
+            self.tree.add_command(chart_group)
+        
         await self.tree.sync()
         logger.info(f"Synced commands for {self.config.name}")
 
@@ -102,16 +113,16 @@ class PriceBot(discord.Client):
         return 0.0
     
     async def get_price_for_crypto(self, crypto: str) -> Optional[float]:
-        """Get price, using database fallback for SHANGHAISILVER."""
+        """Get price, using database fallback for SSILVER."""
         price = await self.price_service.get_price(crypto)
         
-        # SHANGHAISILVER: only use if it looks valid (silver is ~$30+, so > 10)
-        if crypto == "SHANGHAISILVER" and (price is None or price < 10):
+        # SSILVER: only use if it looks valid (silver is ~$30+, so > 10)
+        if crypto == "SSILVER" and (price is None or price < 10):
             db_price = await self.db.get_latest_price(crypto)
             if db_price and db_price > 10:
-                logger.debug(f"SHANGHAISILVER: Using cached price ${db_price}")
+                logger.debug(f"SSILVER: Using cached price ${db_price}")
                 return db_price
-            logger.warning(f"SHANGHAISILVER: No valid price (got {price}), skipping update")
+            logger.warning(f"SSILVER: No valid price (got {price}), skipping update")
             return None
         
         if price is None or price <= 0:
@@ -215,28 +226,150 @@ class PriceBot(discord.Client):
         asyncio.create_task(update_loop())
 
 
+class ChartGroup(app_commands.Group):
+    def __init__(self, db: Database, chart_service: ChartService, crypto_name: str):
+        super().__init__(name="chart", description=f"{crypto_name} chart commands")
+        self.db = db
+        self.chart_service = chart_service
+        self.crypto_name = crypto_name
+    
+    @app_commands.command()
+    async def price(self, interaction: discord.Interaction, hours: int = 24):
+        """Generate price chart."""
+        await self._send_chart(interaction, self.crypto_name, hours)
+    
+    async def _send_chart(self, interaction: discord.Interaction, crypto: str, hours: int):
+        await interaction.response.defer()
+        
+        try:
+            chart_bytes = await self.chart_service.get_chart_bytes(self.db, crypto, hours)
+            
+            if not chart_bytes:
+                await interaction.followup.send(f"No price data available for {crypto} (need at least 2 data points)")
+                return
+            
+            buf = io.BytesIO(chart_bytes)
+            buf.name = f"{crypto.lower()}_chart.png"
+            file = discord.File(buf, filename=buf.name)
+            
+            await interaction.followup.send(
+                content=f"**{crypto.upper()} - {hours}h Price Chart**",
+                file=file
+            )
+        except Exception as e:
+            logger.error(f"Chart command failed for {crypto}: {e}")
+            await interaction.followup.send(f"Error generating chart: {e}")
+
+
+
+
+
 class PriceGroup(app_commands.Group):
     def __init__(self, db: Database, price_service: PriceService):
         super().__init__(name="price", description="Crypto price commands")
         self.db = db
         self.price_service = price_service
     
+    def _get_change(self, history: list) -> float:
+        if len(history) < 2:
+            return 0.0
+        oldest = history[0][1]
+        newest = history[-1][1]
+        if oldest <= 0:
+            return 0.0
+        return ((newest - oldest) / oldest) * 100
+    
     @app_commands.command()
     async def current(self, interaction: discord.Interaction, crypto: str = None):
-        """Get current price of a cryptocurrency."""
+        """Get current price of a cryptocurrency with conversions."""
         crypto = (crypto or os.environ.get("DEFAULT_CRYPTO", "BTC")).upper()
         
         try:
             price = await self.db.get_latest_price(crypto)
-            if price:
-                await interaction.response.send_message(f"{crypto}: {format_price(price)}")
-            else:
+            if not price:
                 fresh_price = await self.price_service.get_price(crypto)
                 if fresh_price:
                     await self.db.save_price(crypto, fresh_price)
-                    await interaction.response.send_message(f"{crypto}: {format_price(fresh_price)}")
+                    price = fresh_price
                 else:
                     await interaction.response.send_message(f"No price data for {crypto}")
+                    return
+            
+            conversions = {}
+            for ticker in ["BTC", "ETH", "SOL"]:
+                try:
+                    conv_price = await self.price_service.get_price(ticker)
+                    if conv_price and conv_price > 0:
+                        conversions[ticker] = conv_price
+                    else:
+                        db_p = await self.db.get_latest_price(ticker)
+                        if db_p and db_p > 0:
+                            conversions[ticker] = db_p
+                except:
+                    pass
+            
+            history_24h = await self.db.get_price_history(crypto, hours=24)
+            history_7d = await self.db.get_price_history(crypto, hours=168)
+            history_30d = await self.db.get_price_history(crypto, hours=720)
+            
+            change_24h = self._get_change(history_24h)
+            change_7d = self._get_change(history_7d)
+            change_30d = self._get_change(history_30d)
+            
+            def change_block(changes: float, label: str) -> str:
+                color = "🟢" if changes >= 0 else "🔴"
+                sign = "+" if changes >= 0 else ""
+                return f"**{label}**\n{color} {sign}{changes:.2f}%"
+            
+            embed = discord.Embed(
+                title=f"{crypto}",
+                color=0x00ff00 if change_24h >= 0 else 0xff0000
+            )
+            
+            embed.add_field(
+                name="USD",
+                value=f"**${price:,.6f}**" if price < 1 else f"**${price:,.2f}**" if price >= 100 else f"**${price:,.4f}**",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="24h",
+                value=change_block(change_24h, ""),
+                inline=True
+            )
+            
+            embed.add_field(
+                name="7d",
+                value=change_block(change_7d, ""),
+                inline=True
+            )
+            
+            embed.add_field(
+                name="30d",
+                value=change_block(change_30d, ""),
+                inline=True
+            )
+            
+            conversions_text = ""
+            if "BTC" in conversions and conversions["BTC"] > 0 and crypto != "BTC":
+                btc_val = price / conversions["BTC"]
+                conversions_text += f"BTC: `{btc_val:.8f}`\n"
+            if "ETH" in conversions and conversions["ETH"] > 0 and crypto != "ETH":
+                eth_val = price / conversions["ETH"]
+                conversions_text += f"ETH: `{eth_val:.8f}`\n"
+            if "SOL" in conversions and conversions["SOL"] > 0 and crypto != "SOL":
+                sol_val = price / conversions["SOL"]
+                conversions_text += f"SOL: `{sol_val:.8f}`\n"
+            
+            if conversions_text:
+                embed.add_field(
+                    name="Conversions",
+                    value=conversions_text,
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed)
+            
         except Exception as e:
             logger.error(f"Price command failed: {e}")
             await interaction.response.send_message(f"Error: {e}")
@@ -247,8 +380,9 @@ async def run_bot(cfg: BotConfig):
     db = Database()
     await db.connect()
     price_service = PriceService()
+    chart_service = ChartService()
     
-    client = PriceBot(cfg, db, price_service)
+    client = PriceBot(cfg, db, price_service, chart_service)
     
     while True:
         try:

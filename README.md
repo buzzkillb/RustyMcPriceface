@@ -24,6 +24,8 @@ Pyth Network / Yahoo Finance / GoldSilver.ai
 - Status cycles through: BTC value, ETH value, SOL value, 1-hour change
 - All prices stored in PostgreSQL for historical tracking
 - Each bot is independent - add more by adding tokens to .env
+- Slash commands for charts and detailed price info
+- Beautiful dark-themed charts with high/low markers
 
 ## Prerequisites
 
@@ -62,7 +64,7 @@ Get Pyth Network feed IDs from https://insights.pyth.network/price-feeds
 
 ### Special Tickers
 - DXY: Fetched via Yahoo Finance (DX-Y.NYB)
-- SHANGHAISILVER: Fetched via GoldSilver.ai scraping
+- SSILVER: Fetched via GoldSilver.ai scraping
 - GOLD, SILVER: Fetched via Pyth Network
 
 ### Optional Settings
@@ -97,6 +99,33 @@ Each bot cycles its status every update interval:
 
 The bot skips showing its own ticker in the conversion (BTC bot shows ETH/SOL/1h%, not BTC).
 
+## Slash Commands
+
+Each bot supports the following slash commands:
+
+### /chart price
+Generates a price chart from historical data.
+
+**Usage:** `/chart price hours:24`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| hours  | int  | 24      | Number of hours of data to display (24, 48, 168, 720, etc.) |
+
+**Available for:** BTC, ETH, SOL, SSILVER, DXY bots
+
+### /price current
+Shows the current price with conversions and percentage changes.
+
+**Usage:** `/price current` or `/price current crypto:BTC`
+
+Displays:
+- Current USD price
+- 24h, 7d, 30d percentage changes (green/red indicators)
+- Conversions to BTC, ETH, SOL (if applicable)
+
+**Available for:** All bots
+
 ## Adding New Bots
 
 Add more tokens to `.env`:
@@ -113,6 +142,7 @@ The bot will automatically spawn a new instance for each token.
 - PostgreSQL (asyncpg)
 - discord.py (Discord API)
 - aiohttp (HTTP client)
+- matplotlib (chart generation)
 - Pyth Network (price feeds)
 - Yahoo Finance (DXY index)
 - GoldSilver.ai (Shanghai Silver)
@@ -122,9 +152,10 @@ The bot will automatically spawn a new instance for each token.
 ```
 .
 ├── bot.py              # Main bot with Discord integration
-├── database.py          # PostgreSQL operations
-├── price_service.py   # Price fetching from various sources
-├── docker-compose.yml  # Container orchestration
+├── database.py         # PostgreSQL operations
+├── price_service.py    # Price fetching from various sources
+├── chart_service.py     # Chart generation with matplotlib
+├── docker-compose.yml   # Container orchestration
 ├── Dockerfile          # Python container image
 ├── requirements.txt    # Python dependencies
 └── .env.example        # Environment variable template
