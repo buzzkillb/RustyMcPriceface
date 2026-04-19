@@ -44,54 +44,12 @@ class PriceService:
         return self.session
     
     async def get_shanghai_silver_price(self) -> Optional[float]:
-        """Fetch Shanghai Silver price from goldsilver.ai."""
-        try:
-            session = await self._get_session()
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
-            async with session.get(GOLDSILVER_AI_URL, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning(f"goldsilver.ai returned {resp.status}")
-                    return None
-                
-                text = await resp.text()
-                return self._extract_shanghai_price(text)
-                
-        except Exception as e:
-            logger.error(f"Failed to fetch Shanghai Silver: {e}")
-            return None
-    
-    def _extract_shanghai_price(self, html: str) -> Optional[float]:
-        """Extract Shanghai Silver price from HTML."""
-        patterns = [
-            r'Shanghai Spot.*?\$?([0-9,]+\.?[0-9]*)',
-            r'"price".*?"amount".*?([0-9,]+\.?[0-9]*)',
-            r'Silver.*?\$?([0-9,]+\.?[0-9]*)',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
-            if match:
-                price_str = match.group(1).replace(",", "")
-                try:
-                    price = float(price_str)
-                    if price > 0:
-                        logger.debug(f"Extracted Shanghai Silver price: ${price}")
-                        return price
-                except ValueError:
-                    continue
-        
-        return None
+        """Shanghai Silver - site is JS rendered, use database fallback."""
+        return None  # Always fall back to database
     
     async def get_price(self, crypto: str) -> Optional[float]:
         """Get price for a single cryptocurrency."""
         crypto = crypto.upper()
-        
-        # Special handling for Shanghai Silver
-        if crypto == "SHANGHAISILVER":
-            return await self.get_shanghai_silver_price()
         
         if crypto not in self.feeds:
             logger.warning(f"No feed ID for {crypto}")
