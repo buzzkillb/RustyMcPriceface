@@ -235,6 +235,18 @@ class PriceBot(discord.Client):
 
 
 class ChartGroup(app_commands.Group):
+    TIMEFRAME_OPTIONS = {
+        "1h": 1, "1hr": 1, "1hour": 1,
+        "6h": 6, "6hr": 6, "6hour": 6,
+        "12h": 12, "12hr": 12, "12hour": 12,
+        "24h": 24, "1d": 24, "24hr": 24, "1day": 24,
+        "48h": 48, "2d": 48, "48hr": 48, "2day": 48,
+        "168h": 168, "7d": 168, "1w": 168, "1wk": 168, "1week": 168,
+        "336h": 336, "14d": 336, "2w": 336, "2wk": 336, "2week": 336,
+        "720h": 720, "30d": 720, "30day": 720, "1m": 720, "1month": 720,
+        "2160h": 2160, "90d": 2160, "3m": 2160, "3month": 2160, "90day": 2160,
+    }
+    
     def __init__(self, db: Database, chart_service: ChartService, crypto_name: str):
         super().__init__(name="chart", description=f"{crypto_name} chart commands")
         self.db = db
@@ -242,28 +254,29 @@ class ChartGroup(app_commands.Group):
         self.crypto_name = crypto_name
     
     @app_commands.command()
-    @app_commands.describe(timeframe="Timeframe for the chart")
-    @app_commands.choices(timeframe=[
-        app_commands.Choice(name="1 Hour", value=1),
-        app_commands.Choice(name="6 Hours", value=6),
-        app_commands.Choice(name="12 Hours", value=12),
-        app_commands.Choice(name="24 Hours (1 Day)", value=24),
-        app_commands.Choice(name="48 Hours (2 Days)", value=48),
-        app_commands.Choice(name="168 Hours (1 Week)", value=168),
-        app_commands.Choice(name="336 Hours (2 Weeks)", value=336),
-        app_commands.Choice(name="720 Hours (30 Days)", value=720),
-        app_commands.Choice(name="2160 Hours (90 Days)", value=2160),
-    ])
-    async def price(self, interaction: discord.Interaction, timeframe: app_commands.Choice[int] = None):
+    @app_commands.describe(timeframe="Timeframe (e.g., 24h, 2d, 1w, 30d, 3m)")
+    async def price(self, interaction: discord.Interaction, timeframe: str = "24h"):
         """Generate price chart."""
-        hours = timeframe.value if timeframe else 24
-        await self._send_chart(interaction, self.crypto_name, hours)
+        hours = self.TIMEFRAME_OPTIONS.get(timeframe.lower())
+        if not hours:
+            await interaction.response.send_message(
+                f"Invalid timeframe '{timeframe}'. Try: 24h, 2d, 1w, 30d, 3m",
+                ephemeral=True
+            )
+            return
+        await self._send_chart(interaction, self.crypto_name, hours, timeframe)
     
-    async def _send_chart(self, interaction: discord.Interaction, crypto: str, hours: int):
+    @price.autocomplete("timeframe")
+    async def timeframe_autocomplete(self, interaction: discord.Interaction, current: str):
+        options = list(self.TIMEFRAME_OPTIONS.keys())
+        filtered = [opt for opt in options if current.lower() in opt.lower()] if current else options[:9]
+        return [app_commands.Choice(name=opt, value=opt) for opt in filtered[:25]]
+    
+    async def _send_chart(self, interaction: discord.Interaction, crypto: str, hours: int, timeframe_str: str = "24h"):
         await interaction.response.defer()
         
         try:
-            chart_bytes = await self.chart_service.get_chart_bytes(self.db, crypto, hours)
+            chart_bytes = await self.chart_service.get_chart_bytes(self.db, crypto, hours, timeframe_str)
             
             if not chart_bytes:
                 await interaction.followup.send(f"No price data available for {crypto} (need at least 2 data points)")
@@ -274,7 +287,7 @@ class ChartGroup(app_commands.Group):
             file = discord.File(buf, filename=buf.name)
             
             await interaction.followup.send(
-                content=f"**{crypto.upper()} - {hours}h Price Chart**",
+                content=f"**{crypto.upper()} - {timeframe_str} chart**",
                 file=file
             )
         except Exception as e:

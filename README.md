@@ -106,11 +106,13 @@ Each bot supports the following slash commands:
 ### /chart price
 Generates a price chart from historical data with high/low markers and percentage change.
 
-**Usage:** `/chart price` (opens dropdown menu)
+**Usage:** `/chart price timeframe:2w`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| timeframe | string | 24 Hours | Preset timeframes: 1h, 6h, 12h, 24h, 48h, 1w, 2w, 30d, 90d |
+| timeframe | string | 24h | Timeframe: 1h, 6h, 12h, 24h, 48h, 1w, 2w, 30d, 3m |
+
+Type any value and autocomplete will suggest options.
 
 The chart displays:
 - Price line with color indicating direction (green up, red down)
