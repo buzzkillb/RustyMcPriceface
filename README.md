@@ -104,13 +104,20 @@ The bot skips showing its own ticker in the conversion (BTC bot shows ETH/SOL/1h
 Each bot supports the following slash commands:
 
 ### /chart price
-Generates a price chart from historical data.
+Generates a price chart from historical data with high/low markers and percentage change.
 
 **Usage:** `/chart price` (opens dropdown menu)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | timeframe | string | 24 Hours | Preset timeframes: 1h, 6h, 12h, 24h, 48h, 1w, 2w, 30d, 90d |
+
+The chart displays:
+- Price line with color indicating direction (green up, red down)
+- High/low markers with price labels
+- Current price annotation
+- Percentage change for the selected timeframe
+- Dark-themed styling
 
 **Available for:** All bots (shows chart for the bot's specific ticker)
 
