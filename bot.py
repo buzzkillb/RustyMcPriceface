@@ -157,5 +157,7 @@ if __name__ == "__main__":
     logger.info(f"Found {len(configs)} bot configuration(s)")
     
     # Run all bots concurrently
-    tasks = [main(cfg) for cfg in configs]
-    asyncio.gather(*tasks)
+    async def run_all():
+        await asyncio.gather(*[main(cfg) for cfg in configs], return_exceptions=True)
+    
+    asyncio.run(run_all())

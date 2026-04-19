@@ -41,35 +41,56 @@ class Database:
     async def _create_tables(self):
         """Create necessary tables if they don't exist."""
         async with self.pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS prices (
-                    id BIGSERIAL PRIMARY KEY,
-                    crypto_name TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    timestamp BIGINT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp 
-                    ON prices(crypto_name, timestamp DESC);
-                
-                CREATE TABLE IF NOT EXISTS price_aggregates (
-                    id BIGSERIAL PRIMARY KEY,
-                    crypto_name TEXT NOT NULL,
-                    bucket_start BIGINT NOT NULL,
-                    bucket_duration INTEGER NOT NULL,
-                    open_price REAL NOT NULL,
-                    high_price REAL NOT NULL,
-                    low_price REAL NOT NULL,
-                    close_price REAL NOT NULL,
-                    avg_price REAL NOT NULL,
-                    sample_count INTEGER NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_aggregates_crypto_bucket 
-                    ON price_aggregates(crypto_name, bucket_start, bucket_duration);
-            """)
+            try:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS prices (
+                        id BIGSERIAL PRIMARY KEY,
+                        crypto_name TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        timestamp BIGINT NOT NULL,
+                        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            except Exception as e:
+                if "already exists" not in str(e):
+                    logger.warning(f"Table creation warning (may be OK): {e}")
+            
+            try:
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp 
+                        ON prices(crypto_name, timestamp DESC)
+                """)
+            except Exception as e:
+                logger.warning(f"Index creation warning (may be OK): {e}")
+            
+            try:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS price_aggregates (
+                        id BIGSERIAL PRIMARY KEY,
+                        crypto_name TEXT NOT NULL,
+                        bucket_start BIGINT NOT NULL,
+                        bucket_duration INTEGER NOT NULL,
+                        open_price REAL NOT NULL,
+                        high_price REAL NOT NULL,
+                        low_price REAL NOT NULL,
+                        close_price REAL NOT NULL,
+                        avg_price REAL NOT NULL,
+                        sample_count INTEGER NOT NULL,
+                        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            except Exception as e:
+                if "already exists" not in str(e):
+                    logger.warning(f"Table creation warning (may be OK): {e}")
+            
+            try:
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_aggregates_crypto_bucket 
+                        ON price_aggregates(crypto_name, bucket_start, bucket_duration)
+                """)
+            except Exception as e:
+                logger.warning(f"Index creation warning (may be OK): {e}")
+            
             logger.info("Database tables initialized")
     
     async def save_price(self, crypto_name: str, price: float) -> bool:
