@@ -148,7 +148,7 @@ class PriceBot(discord.Client):
             # Cycle between BTC value and 1h percentage
             if show_btc and btc_price and btc_price > 0 and display_crypto.upper() != "BTC":
                 btc_value = price / btc_price
-                status_text = f"₿{btc_value:.6f}"
+                status_text = f"{btc_value:.6f} BTC"
             else:
                 change_sign = "+" if change_percent >= 0 else ""
                 status_text = f"{change_sign}{change_percent:.2f}% (1h)"
