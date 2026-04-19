@@ -1,39 +1,34 @@
 # RustyMcPriceface
 
-Discord bot that tracks cryptocurrency and asset prices using Pyth Network and posts updates to Discord channels.
+Discord bot that tracks cryptocurrency and asset prices. Each bot displays its ticker's price and cycles through BTC/ETH/SOL conversions plus 1-hour percentage change.
 
 ## Architecture
 
 ```
-                    Pyth Network
-                          |
-                    Price Service
-                          |
-                    shared/prices.json
-                          |
-         +----------------+----------------+
-         |                |                |
-      Bot BTC         Bot ETH         Bot SOL
-      (token)         (token)         (token)
-         |                |                |
-    +----+----+     +----+----+     +----+----+
-    |         |     |         |     |         |
- Discord   SQLite  Discord   SQLite  Discord   SQLite
+Pyth Network / Yahoo Finance / GoldSilver.ai
+                    |
+              Price Service
+                    |
+              PostgreSQL Database
+                    |
+    +-------------+-------------+-------------+
+    |             |             |             |
+  Bot BTC      Bot ETH       Bot SOL    Bot TICKER
 ```
 
-## How It Works
+## Features
 
-1. Price Service fetches prices from Pyth Network every 30 seconds
-2. Prices are written to shared JSON file and SQLite database
-3. Each bot instance reads prices and updates its Discord nickname
-4. Multiple bot instances run in parallel, one per token
-
-Each bot is independent - add more by adding tokens to .env.
+- Multiple bot instances run in parallel, one per ticker
+- Prices fetched from Pyth Network (crypto), Yahoo Finance (indices), GoldSilver.ai (metals)
+- Discord nicknames show ticker and current price
+- Status cycles through: BTC value, ETH value, SOL value, 1-hour change
+- All prices stored in PostgreSQL for historical tracking
+- Each bot is independent - add more by adding tokens to .env
 
 ## Prerequisites
 
 - Docker and Docker Compose
-- A Discord application with bot tokens
+- Discord applications with bot tokens
 
 ## Setup
 
@@ -45,17 +40,36 @@ Each bot is independent - add more by adding tokens to .env.
 2. Edit `.env` and add your Discord bot tokens. Get tokens from https://discord.com/developers/applications
 
 3. In the Discord developer portal for each bot:
-   - Enable "Public Bot" 
-   - Enable "Server Members Intent"
-   - Enable "Message Content Intent"
+   - Enable "Public Bot"
+   - Enable necessary intents for your bot features
 
 4. Invite each bot to your server using the OAuth2 URL in the Discord developer portal
 
-5. The CRYPTO_FEEDS variable controls which assets to track:
-   ```
-   CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,...
-   ```
-   Get feed IDs from https://insights.pyth.network/price-feeds?search=btc
+## Environment Variables
+
+### Bot Tokens
+```
+DISCORD_TOKEN_BTC=your_btc_bot_token
+DISCORD_TOKEN_ETH=your_eth_bot_token
+DISCORD_TOKEN_SOL=your_sol_bot_token
+```
+
+### Price Feed Configuration
+```
+CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,SOL:feed_id,...
+```
+Get Pyth Network feed IDs from https://insights.pyth.network/price-feeds
+
+### Special Tickers
+- DXY: Fetched via Yahoo Finance (DX-Y.NYB)
+- SHANGHAISILVER: Fetched via GoldSilver.ai scraping
+- GOLD, SILVER: Fetched via Pyth Network
+
+### Optional Settings
+```
+UPDATE_INTERVAL_SECONDS=12
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/pricebot
+```
 
 ## Running
 
@@ -75,58 +89,52 @@ docker-compose logs -f
 docker-compose down
 ```
 
-### Check Bot Status in Discord
+## Bot Status Display
+
+Each bot cycles its status every update interval:
+- Nickname: `BTC $67,432`
+- Status cycles: `0.030582 BTC` -> `3.421 ETH` -> `285.67 SOL` -> `+1.24% (1h)` -> repeat
+
+The bot skips showing its own ticker in the conversion (BTC bot shows ETH/SOL/1h%, not BTC).
+
+## Adding New Bots
+
+Add more tokens to `.env`:
 ```
-!status
-```
-
-### Health Check
-The health endpoint is available at localhost:8080/health
-
-```
-curl http://localhost:8080/health
-```
-
-## Configuration
-
-### Update Interval
-Edit `.env` and change `UPDATE_INTERVAL_SECONDS` (default 12 seconds):
-```
-UPDATE_INTERVAL_SECONDS=30
-```
-
-### Adding New Assets
-
-1. Add a new bot token in `.env`: `DISCORD_TOKEN_ASSETNAME=your_token`
-2. Add the Pyth Network feed ID in `CRYPTO_FEEDS`: `ASSETNAME:feed_id`
-3. Rebuild: `docker-compose up -d --build`
-
-### Adding More Bots
-
-Simply add more tokens to `.env`:
-```
-DISCORD_TOKEN_BTC=your_btc_token
-DISCORD_TOKEN_ETH=your_eth_token
 DISCORD_TOKEN_NEWTICKER=your_new_token
 ```
 
-The bot will automatically spawn new instances for each token.
-
-## Bot Commands
-
-- `!BTC` - Get BTC price
-- `!ETH` - Get ETH price
-- `/price` - Slash command for prices
-- `!silverchart` - Get silver price chart
-- `!status` - Check system status (BTC bot only)
+The bot will automatically spawn a new instance for each token.
 
 ## Tech Stack
 
 - Docker with Docker Compose
-- Debian (Docker base image)
-- Rust (edition 2021)
-- Serenity (Discord bot library)
-- SQLite (database)
+- Python 3.12
+- PostgreSQL (asyncpg)
+- discord.py (Discord API)
+- aiohttp (HTTP client)
 - Pyth Network (price feeds)
-- Axum (HTTP server)
-- Plotters (chart generation)
+- Yahoo Finance (DXY index)
+- GoldSilver.ai (Shanghai Silver)
+
+## Project Structure
+
+```
+.
+├── bot.py              # Main bot with Discord integration
+├── database.py          # PostgreSQL operations
+├── price_service.py   # Price fetching from various sources
+├── docker-compose.yml  # Container orchestration
+├── Dockerfile          # Python container image
+├── requirements.txt    # Python dependencies
+└── .env.example        # Environment variable template
+```
+
+## Database
+
+Prices are stored in PostgreSQL with the following schema:
+
+- `prices`: ticker, price, timestamp
+- `price_aggregates`: aggregated price data for historical queries
+
+The database container stores data in a named volume to persist across restarts.
