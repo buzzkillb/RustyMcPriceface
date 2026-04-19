@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 import discord
 from discord import app_commands
@@ -100,6 +100,27 @@ class PriceBot(discord.Client):
         except Exception as e:
             logger.debug(f"Could not get 1h change for {crypto}: {e}")
         return 0.0
+    
+    async def get_price_for_crypto(self, crypto: str) -> Optional[float]:
+        """Get price, using database fallback for SHANGHAISILVER."""
+        price = await self.price_service.get_price(crypto)
+        
+        # SHANGHAISILVER: only use if it looks valid (silver is ~$30+, so > 10)
+        if crypto == "SHANGHAISILVER" and (price is None or price < 10):
+            db_price = await self.db.get_latest_price(crypto)
+            if db_price and db_price > 10:
+                logger.debug(f"SHANGHAISILVER: Using cached price ${db_price}")
+                return db_price
+            logger.warning(f"SHANGHAISILVER: No valid price (got {price}), skipping update")
+            return None
+        
+        if price is None or price <= 0:
+            db_price = await self.db.get_latest_price(crypto)
+            if db_price and db_price > 0:
+                logger.debug(f"Using cached {crypto} price: ${db_price}")
+                return db_price
+            return None
+        return price
 
     async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str):
         """Update nickname and custom status."""
@@ -142,7 +163,7 @@ class PriceBot(discord.Client):
             
             while True:
                 try:
-                    price = await self.price_service.get_price(self.config.crypto)
+                    price = await self.get_price_for_crypto(self.config.crypto)
                     if price and price > 0:
                         await self.db.save_price(self.config.crypto, price)
                         current_price = price
