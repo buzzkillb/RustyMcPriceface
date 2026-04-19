@@ -194,36 +194,28 @@ impl HealthAggregator {
     }
 
     pub async fn add_bot(&self, health: Arc<HealthState>) {
-        if let Ok(mut bots) = self.bots.lock().await {
-            bots.push(health);
-        }
+        let mut bots = self.bots.lock().await;
+        bots.push(health);
     }
 
     pub async fn is_healthy(&self) -> bool {
-        if let Ok(bots) = self.bots.lock().await {
-            if bots.is_empty() {
-                return true;
-            }
-            return bots.iter().all(|b| b.is_healthy());
+        let bots = self.bots.lock().await;
+        if bots.is_empty() {
+            return true;
         }
-        false
+        bots.iter().all(|b| b.is_healthy())
     }
 
     pub async fn is_all_healthy(&self) -> bool {
-        if let Ok(bots) = self.bots.lock().await {
-            if bots.is_empty() {
-                return true;
-            }
-            return bots.iter().all(|b| b.is_healthy());
+        let bots = self.bots.lock().await;
+        if bots.is_empty() {
+            return true;
         }
-        false
+        bots.iter().all(|b| b.is_healthy())
     }
 
     pub async fn to_json(&self) -> serde_json::Value {
-        let bots = match self.bots.lock().await {
-            Ok(bots) => bots,
-            Err(_) => return json!({"error": "lock poisoned"}),
-        };
+        let bots = self.bots.lock().await;
         let bots_json: Vec<serde_json::Value> = bots.iter().map(|b| b.to_json()).collect();
 
         let any_healthy = bots.iter().any(|b| b.is_healthy());

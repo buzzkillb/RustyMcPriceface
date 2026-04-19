@@ -798,218 +798,178 @@ async fn price_update_loop(
     let crypto_name = &config.crypto_name;
     let mut consecutive_failures = 0;
     let discord_api = DiscordApi::new(http);
+    let update_interval = config.update_interval;
+    let mut last_connectivity_check = std::time::Instant::now() - update_interval;
+    const CONNECTIVITY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
     info!("Starting price update loop for {}", crypto_name);
 
     loop {
         let loop_start = std::time::Instant::now();
 
-        // Wrap the entire update logic in error handling
-        let update_result = async {
-            // Get current price with error handling
-            let current_price = match get_crypto_price(&config, &database).await {
-                Ok(price) => {
-                    consecutive_failures = 0; // Reset failure counter on success
-                    health.reset_failures();
-                    health.update_price_timestamp();
-                    price
-                }
-                Err(e) => {
-                    consecutive_failures += 1;
-                    health.increment_failures();
-                    error!(
-                        "Failed to get {} price (failure {}/{}): {}",
-                        crypto_name, consecutive_failures, MAX_CONSECUTIVE_FAILURES, e
-                    );
-
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                        error!(
-                            "Too many consecutive failures for {}. Entering recovery mode.",
-                            crypto_name
-                        );
-                        sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
-                        consecutive_failures = 0; // Reset after recovery delay
-                        health.reset_failures();
-                    }
-                    return Err(e);
-                }
-            };
-
-            // Get price change indicator with error handling
-            let (arrow, change_percent) = database.get_price_indicator(crypto_name, current_price);
-
-            // Format the nickname
-            let nickname = if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
-                format!("SILVER {}", format_price(current_price))
-            } else {
-                format!("{} {}", crypto_name, format_price(current_price))
-            };
-
-            // Format the custom status with rotation
-            let update_interval_secs = config.update_interval.as_secs().max(1);
-            let update_count = match get_current_timestamp() {
-                Ok(time) => (time / update_interval_secs) % 4,
-                Err(_) => 0,
-            };
-
-            let custom_status = match read_prices_from_file().await {
-                Ok(shared_prices) => {
-                    format_custom_status(
-                        crypto_name,
-                        current_price,
-                        &shared_prices,
-                        update_count,
-                        &arrow,
-                        change_percent,
-                    )
-                }
-                Err(e) => {
-                    warn!("Failed to read shared prices for status: {}", e);
-                    if change_percent == 0.0 && arrow == "🔄" {
-                        format!("{} Building history", arrow)
-                    } else {
-                        let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                        format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
-                    }
-                }
-            };
-
-            debug!("Updating nickname to: {}", nickname);
-            debug!("Updating custom status to: {}", custom_status);
-
-            // Update custom status (activity) - this doesn't return a Result but we can still track attempts
-            ctx.set_activity(Some(ActivityData::playing(custom_status.clone())));
-            debug!("Updated activity status");
-            
-            // Note: set_activity doesn't return errors, so we can't directly detect failures here
-            // The periodic Discord test will catch connectivity issues
-
-            // Save current price to database with error handling
-            if let Err(e) = database.save_price(crypto_name, current_price) {
-                error!("Failed to save price to database: {}", e);
-            } else {
-                health.update_db_timestamp();
-            }
-
-            // Update nickname in guilds with rate limiting and error handling
-            let guilds = ctx.cache.guilds();
-            let guild_count = guilds.len();
-
-            if guild_count > 0 {
-                info!("Updating nickname in {} guilds", guild_count);
-
-                let results = discord_api
-                    .update_nicknames_in_guilds(&guilds, &nickname)
-                    .await;
-
-                // Count successful updates and track failures more aggressively
-                let successful_updates = results.iter().filter(|r| r.is_ok()).count();
-                let failed_updates = results.iter().filter(|r| r.is_err()).count();
-                
-                if successful_updates > 0 {
-                    health.update_discord_timestamp();
-                    // Only reset gateway failures if most updates succeeded
-                    if successful_updates > failed_updates {
-                        health.reset_gateway_failures();
-                    }
-                } else {
-                    // All updates failed - increment gateway failures
-                    health.increment_gateway_failures();
-                    warn!("All {} Discord nickname updates failed", guild_count);
-                    
-                    // If no Discord updates succeeded, check if we should exit for restart
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let last_discord = health.last_discord_update.load(std::sync::atomic::Ordering::Relaxed);
-                    
-                    // If Discord communication has been failing for more than 2 minutes, exit for restart
-                    if now.saturating_sub(last_discord) > 120 {
-                        error!("Discord communication has been failing for over 2 minutes. Exiting for restart.");
-                        return Err(BotError::Discord("Gateway connection lost - restarting".into()));
-                    }
-                }
-                
-                // Track partial failures
-                if failed_updates > 0 {
-                    warn!("Some Discord updates failed: {}/{} failed", failed_updates, guild_count);
-                }
-
-                debug!(
-                    "Updated nicknames: {}/{} successful",
-                    successful_updates, guild_count
-                );
-            } else {
-                warn!("No guilds found in cache - Discord connection may be lost!");
-                health.increment_gateway_failures();
-                
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let last_discord = health.last_discord_update.load(std::sync::atomic::Ordering::Relaxed);
-                
-                if now.saturating_sub(last_discord) > 120 {
-                    error!("No guilds for over 2 minutes. Exiting for restart.");
-                    return Err(BotError::Discord("Gateway connection lost - no guilds detected".into()));
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        // Handle update result
-        match update_result {
-            Ok(_) => {
-                debug!("Price update completed successfully for {}", crypto_name);
+        let current_price = match get_crypto_price(&config, &database).await {
+            Ok(price) => {
+                consecutive_failures = 0;
+                health.reset_failures();
+                health.update_price_timestamp();
+                price
             }
             Err(e) => {
-                error!("Price update failed for {}: {}", crypto_name, e);
+                consecutive_failures += 1;
+                health.increment_failures();
+                error!(
+                    "Failed to get {} price (failure {}/{}): {}",
+                    crypto_name, consecutive_failures, MAX_CONSECUTIVE_FAILURES, e
+                );
+
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    error!(
+                        "Too many consecutive failures for {}. Entering recovery mode.",
+                        crypto_name
+                    );
+                    sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
+                    consecutive_failures = 0;
+                    health.reset_failures();
+                }
+
+                sleep(config.update_interval).await;
+                continue;
             }
-        }
+        };
 
-        // Periodic cleanup of old prices
-        database.maybe_cleanup();
+        let (arrow, change_percent) = database.get_price_indicator(crypto_name, current_price);
 
-        // Periodic Discord connectivity test (every 10 update cycles)
+        let nickname = if crypto_name == "SHANGHAI" || crypto_name == "SHANGHAISILVER" {
+            format!("SILVER {}", format_price(current_price))
+        } else {
+            format!("{} {}", crypto_name, format_price(current_price))
+        };
+
+        let update_interval_secs = config.update_interval.as_secs().max(1);
         let update_count = match get_current_timestamp() {
-            Ok(time) => time / config.update_interval.as_secs(),
+            Ok(time) => (time / update_interval_secs) % 40,
             Err(_) => 0,
         };
 
-        if update_count % 10 == 0 {
+        let custom_status = match read_prices_from_file().await {
+            Ok(shared_prices) => format_custom_status(
+                crypto_name,
+                current_price,
+                &shared_prices,
+                update_count,
+                &arrow,
+                change_percent,
+            ),
+            Err(e) => {
+                warn!("Failed to read shared prices for status: {}", e);
+                if change_percent == 0.0 && arrow == "🔄" {
+                    format!("{} Building history", arrow)
+                } else {
+                    let change_sign = if change_percent >= 0.0 { "+" } else { "" };
+                    format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
+                }
+            }
+        };
+
+        debug!("Updating nickname to: {}", nickname);
+        debug!("Updating custom status to: {}", custom_status);
+
+        ctx.set_activity(Some(ActivityData::playing(custom_status.clone())));
+        debug!("Updated activity status");
+
+        if let Err(e) = database.save_price(crypto_name, current_price) {
+            error!("Failed to save price to database: {}", e);
+        } else {
+            health.update_db_timestamp();
+        }
+
+        let guilds = ctx.cache.guilds();
+        let guild_count = guilds.len();
+
+        if guild_count > 0 {
+            info!("Updating nickname in {} guilds", guild_count);
+
+            let results = discord_api
+                .update_nicknames_in_guilds(&guilds, &nickname)
+                .await;
+
+            let successful_updates = results.iter().filter(|r| r.is_ok()).count();
+            let failed_updates = results.iter().filter(|r| r.is_err()).count();
+
+            if successful_updates > 0 {
+                health.update_discord_timestamp();
+                if successful_updates > failed_updates {
+                    health.reset_gateway_failures();
+                }
+            } else {
+                health.increment_gateway_failures();
+                warn!("All {} Discord nickname updates failed", guild_count);
+            }
+        } else {
+            warn!("No guilds found in cache - Discord connection may be lost!");
+            health.increment_gateway_failures();
+        }
+
+        database.maybe_cleanup();
+
+        if last_connectivity_check.elapsed() >= CONNECTIVITY_CHECK_INTERVAL {
+            last_connectivity_check = std::time::Instant::now();
             debug!(
                 "Running periodic Discord connectivity test for {}",
                 crypto_name
             );
             let health_clone = health.clone();
-            tokio::spawn(async move {
-                test_discord_connectivity(health_clone).await;
-            });
+            test_discord_connectivity(health_clone).await;
         }
 
-        // Calculate how long the update took and adjust sleep time
-        let loop_duration = loop_start.elapsed();
-        let target_interval = config.update_interval;
-
-        if loop_duration < target_interval {
-            let sleep_time = target_interval - loop_duration;
-            debug!(
-                "Update took {:?}, sleeping for {:?}",
-                loop_duration, sleep_time
+        let gateway_failures = health
+            .gateway_failures
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if gateway_failures >= 5 {
+            error!(
+                "Gateway failures reached {} - too many consecutive failures. Exiting for restart.",
+                gateway_failures
             );
-            sleep(sleep_time).await;
+            break;
+        }
+
+        let discord_test_failures = health
+            .discord_test_failures
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if discord_test_failures >= 3 {
+            error!(
+                "Discord connectivity test failed {} times. Exiting for restart.",
+                discord_test_failures
+            );
+            break;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_discord = health
+            .last_discord_update
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if last_discord > 0 && now.saturating_sub(last_discord) > 120 {
+            error!("No successful Discord update for over 2 minutes. Exiting for restart.");
+            break;
+        }
+
+        let loop_duration = loop_start.elapsed();
+
+        if loop_duration < update_interval {
+            sleep(update_interval - loop_duration).await;
         } else {
             warn!(
                 "Update took longer than interval: {:?} > {:?}",
-                loop_duration, target_interval
+                loop_duration, update_interval
             );
-            // Still sleep for a minimum time to prevent tight loops
             sleep(Duration::from_secs(1)).await;
         }
     }
+
+    error!("Price update loop exited for {}", crypto_name);
 }
 
 /// Format custom status based on crypto type and rotation
@@ -1268,8 +1228,7 @@ fn format_custom_status(
                 }
                 1 => format!("{:.8} ₿", btc_amount),
                 2 => format!("{:.8} Ξ", eth_amount),
-                3 => format!("{:.8} ◎", sol_amount),
-                _ => unreachable!(),
+                _ => format!("{:.8} ◎", sol_amount),
             }
         }
     }
