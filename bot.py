@@ -85,7 +85,7 @@ class PriceBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         
     async def setup_hook(self):
-        price_group = PriceGroup(self.db, self.price_service)
+        price_group = PriceGroup(self.db, self.price_service, self.config.crypto)
         self.tree.add_command(price_group)
         
         crypto_name = self.config.crypto.upper()
@@ -265,10 +265,11 @@ class ChartGroup(app_commands.Group):
 
 
 class PriceGroup(app_commands.Group):
-    def __init__(self, db: Database, price_service: PriceService):
+    def __init__(self, db: Database, price_service: PriceService, default_crypto: str):
         super().__init__(name="price", description="Crypto price commands")
         self.db = db
         self.price_service = price_service
+        self.default_crypto = default_crypto.upper()
     
     def _get_change(self, history: list) -> float:
         if len(history) < 2:
@@ -282,7 +283,7 @@ class PriceGroup(app_commands.Group):
     @app_commands.command()
     async def current(self, interaction: discord.Interaction, crypto: str = None):
         """Get current price of a cryptocurrency with conversions."""
-        crypto = (crypto or os.environ.get("DEFAULT_CRYPTO", "BTC")).upper()
+        crypto = (crypto or self.default_crypto).upper()
         
         try:
             price = await self.db.get_latest_price(crypto)

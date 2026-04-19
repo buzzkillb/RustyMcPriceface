@@ -119,6 +119,8 @@ Shows the current price with conversions and percentage changes.
 
 **Usage:** `/price current` or `/price current crypto:BTC`
 
+When called without a crypto argument, defaults to the bot's own ticker (e.g., ETH bot shows ETH price by default).
+
 Displays:
 - Current USD price
 - 24h, 7d, 30d percentage changes (green/red indicators)
