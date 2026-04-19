@@ -1,25 +1,15 @@
+use crate::price_state::{PriceData, PricesFile, SharedPrices};
 use reqwest;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 const HERMES_API_URL: &str = "https://hermes.pyth.network/api/latest_price_feeds";
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct PriceData {
-    pub price: f64,
-    pub timestamp: u64,
-    // Optional fields for detailed data (e.g., Shanghai Premium)
-    pub premium: Option<f64>,
-    pub premium_percent: Option<f64>,
-    pub source: Option<String>,
-    #[serde(default)]
-    pub is_fallback: bool,
-}
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct HistoryData {
@@ -29,12 +19,6 @@ pub struct HistoryData {
     pub premium: f64,
     #[serde(rename = "premiumPercent")]
     pub premium_percent: f64,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct PricesFile {
-    pub prices: HashMap<String, PriceData>,
-    pub timestamp: u64,
 }
 
 fn get_feed_ids() -> HashMap<String, String> {
@@ -386,7 +370,6 @@ async fn write_prices_to_file(
 }
 
 use crate::database::PriceDatabase;
-use std::sync::Arc;
 
 const GOLDSILVER_AI_URL: &str = "https://goldsilver.ai/metal-prices/shanghai-silver-price";
 

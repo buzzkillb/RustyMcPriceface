@@ -161,13 +161,17 @@ impl PriceDatabase {
             };
 
             let old_price = if seconds <= 24 * 3600 {
-                self.get_price_from_raw_data(crypto, time_ago as i64).await?
+                self.get_price_from_raw_data(crypto, time_ago as i64)
+                    .await?
             } else if seconds <= 7 * 24 * 3600 {
-                self.get_price_from_aggregates(crypto, time_ago as i64, 60).await?
+                self.get_price_from_aggregates(crypto, time_ago as i64, 60)
+                    .await?
             } else if seconds < 30 * 24 * 3600 {
-                self.get_price_from_aggregates(crypto, time_ago as i64, 300).await?
+                self.get_price_from_aggregates(crypto, time_ago as i64, 300)
+                    .await?
             } else {
-                self.get_price_from_aggregates(crypto, time_ago as i64, 900).await?
+                self.get_price_from_aggregates(crypto, time_ago as i64, 900)
+                    .await?
             };
 
             if let Some(price) = old_price {
@@ -181,7 +185,7 @@ impl PriceDatabase {
                 changes.push(format!(
                     "{} {}{:.2}% ({})",
                     arrow, sign, change_percent, label
-                )));
+                ));
             } else {
                 debug!(
                     "No {} {} price data found for time_ago: {}",
@@ -217,7 +221,12 @@ impl PriceDatabase {
         Ok(row.map(|r| r.0))
     }
 
-    async fn get_price_from_aggregates(&self, crypto: &str, time_ago: i64, bucket_duration: i64) -> BotResult<Option<f64>> {
+    async fn get_price_from_aggregates(
+        &self,
+        crypto: &str,
+        time_ago: i64,
+        bucket_duration: i64,
+    ) -> BotResult<Option<f64>> {
         let row: Option<(f64,)> = sqlx::query_as(
             "SELECT open_price FROM price_aggregates 
              WHERE crypto_name = $1 AND bucket_duration = $2
@@ -234,7 +243,11 @@ impl PriceDatabase {
         Ok(row.map(|r| r.0))
     }
 
-    pub async fn get_price_indicator(&self, crypto_name: &str, current_price: f64) -> (String, f64) {
+    pub async fn get_price_indicator(
+        &self,
+        crypto_name: &str,
+        current_price: f64,
+    ) -> (String, f64) {
         let current_time = match get_current_timestamp() {
             Ok(time) => time as i64,
             Err(_) => return ("🔄".to_string(), 0.0),
@@ -267,7 +280,11 @@ impl PriceDatabase {
         ("🔄".to_string(), 0.0)
     }
 
-    pub async fn get_price_history(&self, crypto_name: &str, days: u64) -> BotResult<Vec<(i64, f64)>> {
+    pub async fn get_price_history(
+        &self,
+        crypto_name: &str,
+        days: u64,
+    ) -> BotResult<Vec<(i64, f64)>> {
         let current_time = get_current_timestamp()? as i64;
         let start_time = current_time - (days as i64 * 86400);
 
@@ -347,7 +364,10 @@ impl PriceDatabase {
             .map_err(|e| BotError::Database(e.to_string()))?;
 
         if result.rows_affected() > 0 {
-            info!("Cleaned up {} old price records from database", result.rows_affected());
+            info!(
+                "Cleaned up {} old price records from database",
+                result.rows_affected()
+            );
         }
 
         Ok(())

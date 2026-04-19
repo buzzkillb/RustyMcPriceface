@@ -79,21 +79,30 @@ async fn main() -> BotResult<()> {
     info!("🧹 Starting Database Cleanup Service...");
     let db_cleanup_db = db.clone();
     let cleanup_handle = tokio::spawn(async move {
-        let cleanup = DatabaseCleanup::new(db_cleanup_db);
+        let cleanup = DatabaseCleanup::new(&db_cleanup_db);
         loop {
             info!("🧹 Cleanup service starting...");
             match cleanup.run().await {
                 Ok(_) => {
-                    error!("🧹 Cleanup service exited unexpectedly - restarting in {}s", SERVICE_RESTART_DELAY_SECONDS);
+                    error!(
+                        "🧹 Cleanup service exited unexpectedly - restarting in {}s",
+                        SERVICE_RESTART_DELAY_SECONDS
+                    );
                 }
                 Err(e) => {
-                    error!("🧹 Cleanup service crashed: {} - restarting in {}s", e, SERVICE_RESTART_DELAY_SECONDS);
+                    error!(
+                        "🧹 Cleanup service crashed: {} - restarting in {}s",
+                        e, SERVICE_RESTART_DELAY_SECONDS
+                    );
                 }
             }
             sleep(Duration::from_secs(SERVICE_RESTART_DELAY_SECONDS)).await;
         }
     });
-    service_handles.push(ServiceHandle::Service(cleanup_handle, "cleanup".to_string()));
+    service_handles.push(ServiceHandle::Service(
+        cleanup_handle,
+        "cleanup".to_string(),
+    ));
 
     // Spawn Price Service with supervision
     info!("💹 Starting Price Fetching Service...");
@@ -104,16 +113,25 @@ async fn main() -> BotResult<()> {
             info!("💹 Price service starting...");
             match price_service::run(price_service_db.clone(), price_service_prices.clone()).await {
                 Ok(_) => {
-                    error!("💹 Price service exited unexpectedly - restarting in {}s", SERVICE_RESTART_DELAY_SECONDS);
+                    error!(
+                        "💹 Price service exited unexpectedly - restarting in {}s",
+                        SERVICE_RESTART_DELAY_SECONDS
+                    );
                 }
                 Err(e) => {
-                    error!("💹 Price service crashed: {} - restarting in {}s", e, SERVICE_RESTART_DELAY_SECONDS);
+                    error!(
+                        "💹 Price service crashed: {} - restarting in {}s",
+                        e, SERVICE_RESTART_DELAY_SECONDS
+                    );
                 }
             }
             sleep(Duration::from_secs(SERVICE_RESTART_DELAY_SECONDS)).await;
         }
     });
-    service_handles.push(ServiceHandle::Service(price_handle, "price_service".to_string()));
+    service_handles.push(ServiceHandle::Service(
+        price_handle,
+        "price_service".to_string(),
+    ));
 
     // Spawn Shanghai Silver Price Service with supervision
     info!("🏭 Starting Shanghai Silver Price Service...");
@@ -124,16 +142,25 @@ async fn main() -> BotResult<()> {
             info!("🏭 Shanghai price service starting...");
             match shanghai_price_service::run(shanghai_db.clone(), shanghai_prices.clone()).await {
                 Ok(_) => {
-                    error!("🏭 Shanghai price service exited unexpectedly - restarting in {}s", SERVICE_RESTART_DELAY_SECONDS);
+                    error!(
+                        "🏭 Shanghai price service exited unexpectedly - restarting in {}s",
+                        SERVICE_RESTART_DELAY_SECONDS
+                    );
                 }
                 Err(e) => {
-                    error!("🏭 Shanghai price service crashed: {} - restarting in {}s", e, SERVICE_RESTART_DELAY_SECONDS);
+                    error!(
+                        "🏭 Shanghai price service crashed: {} - restarting in {}s",
+                        e, SERVICE_RESTART_DELAY_SECONDS
+                    );
                 }
             }
             sleep(Duration::from_secs(SERVICE_RESTART_DELAY_SECONDS)).await;
         }
     });
-    service_handles.push(ServiceHandle::Service(shanghai_handle, "shanghai_price_service".to_string()));
+    service_handles.push(ServiceHandle::Service(
+        shanghai_handle,
+        "shanghai_price_service".to_string(),
+    ));
 
     // Load all bot instances
     let instances = BotConfig::load_bot_instances();
@@ -164,10 +191,11 @@ async fn main() -> BotResult<()> {
 
         info!("🚀 Spawning bot for {}...", ticker);
 
+        let ticker_for_handle = ticker.clone();
         let bot_handle = tokio::spawn(async move {
             loop {
-                let emoji = utils::get_crypto_emoji(&ticker);
-                info!("{} Starting {} bot...", emoji, ticker);
+                let emoji = utils::get_crypto_emoji(&ticker_for_handle);
+                info!("{} Starting {} bot...", emoji, ticker_for_handle);
 
                 match start_bot(
                     bot_config.clone(),
@@ -179,16 +207,16 @@ async fn main() -> BotResult<()> {
                 .await
                 {
                     Ok(_) => {
-                        error!("{} {} bot exited unexpectedly", emoji, ticker);
+                        error!("{} {} bot exited unexpectedly", emoji, ticker_for_handle);
                     }
                     Err(e) => {
-                        error!("{} {} bot crashed: {}", emoji, ticker, e);
+                        error!("{} {} bot crashed: {}", emoji, ticker_for_handle, e);
                     }
                 }
 
                 error!(
                     "{} Restarting {} bot in {} seconds...",
-                    emoji, ticker, RECONNECT_DELAY_SECONDS
+                    emoji, ticker_for_handle, RECONNECT_DELAY_SECONDS
                 );
                 sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
             }
@@ -221,7 +249,10 @@ async fn main() -> BotResult<()> {
 
     // Monitor all service handles
     if !service_handles.is_empty() {
-        info!("✅ All services spawned. Monitoring {} services...", service_handles.len());
+        info!(
+            "✅ All services spawned. Monitoring {} services...",
+            service_handles.len()
+        );
 
         loop {
             // Check all handles
@@ -246,7 +277,10 @@ async fn main() -> BotResult<()> {
             if !dead_services.is_empty() {
                 for handle in &dead_services {
                     let name = format_service_name(handle);
-                    error!("💀 CRITICAL: {} died unexpectedly - it should auto-restart", name);
+                    error!(
+                        "💀 CRITICAL: {} died unexpectedly - it should auto-restart",
+                        name
+                    );
                 }
             }
 

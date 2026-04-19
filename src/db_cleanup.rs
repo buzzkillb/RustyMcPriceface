@@ -530,33 +530,37 @@ impl DatabaseCleanup {
 
         info!("📊 Step 2/7: Aggregating raw data into 1-minute buckets...");
         let aggregated_1m = self
-            .aggregate_data(60, RAW_DATA_RETENTION_HOURS * 3600)
+            .aggregate_data(60, (RAW_DATA_RETENTION_HOURS * 3600) as i64)
             .await?;
 
         info!("📊 Step 3/7: Aggregating 1-minute data into 5-minute buckets...");
         let aggregated_5m = self
-            .aggregate_buckets(60, 300, MINUTE_DATA_RETENTION_DAYS * 24 * 3600)
+            .aggregate_buckets(60, 300, (MINUTE_DATA_RETENTION_DAYS * 24 * 3600) as i64)
             .await?;
 
         info!("📊 Step 4/7: Aggregating 5-minute data into 15-minute buckets...");
         let aggregated_15m = self
-            .aggregate_buckets(300, 900, FIVE_MINUTE_DATA_RETENTION_DAYS * 24 * 3600)
+            .aggregate_buckets(
+                300,
+                900,
+                (FIVE_MINUTE_DATA_RETENTION_DAYS * 24 * 3600) as i64,
+            )
             .await?;
 
         info!("🗑️ Step 5/7: Cleaning up old raw data (older than 24 hours)...");
         let deleted_raw = self
-            .cleanup_aggregated_raw_data(RAW_DATA_RETENTION_HOURS * 3600)
+            .cleanup_aggregated_raw_data((RAW_DATA_RETENTION_HOURS * 3600) as i64)
             .await?;
 
         info!("🗑️ Step 6/7: Cleaning up old aggregated data...");
         let deleted_1m = self
-            .cleanup_old_aggregates(60, MINUTE_DATA_RETENTION_DAYS * 24 * 3600)
+            .cleanup_old_aggregates(60, (MINUTE_DATA_RETENTION_DAYS * 24 * 3600) as i64)
             .await?;
         let deleted_5m = self
-            .cleanup_old_aggregates(300, FIVE_MINUTE_DATA_RETENTION_DAYS * 24 * 3600)
+            .cleanup_old_aggregates(300, (FIVE_MINUTE_DATA_RETENTION_DAYS * 24 * 3600) as i64)
             .await?;
         let deleted_15m = self
-            .cleanup_old_aggregates(900, FIFTEEN_MINUTE_DATA_RETENTION_DAYS * 24 * 3600)
+            .cleanup_old_aggregates(900, (FIFTEEN_MINUTE_DATA_RETENTION_DAYS * 24 * 3600) as i64)
             .await?;
 
         let total_deleted = deleted_raw + deleted_1m + deleted_5m + deleted_15m;

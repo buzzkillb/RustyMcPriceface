@@ -6,7 +6,7 @@ use crate::health::{HealthAggregator, HealthState};
 use crate::price_state::SharedPrices;
 
 use crate::charting::generate_price_chart;
-use crate::price_service::PricesFile;
+use crate::price_state::PricesFile;
 use crate::utils::{format_price, get_current_timestamp, validate_crypto_name, validate_price};
 use serenity::{
     all::{
@@ -49,7 +49,7 @@ pub struct Bot {
     health: Arc<HealthState>,
     health_aggregator: Arc<HealthAggregator>,
     database: Arc<PriceDatabase>,
-    shared_prices: SharedPrices,
+    shared_prices: Arc<SharedPrices>,
 }
 
 impl Bot {
@@ -59,7 +59,7 @@ impl Bot {
         database: Arc<PriceDatabase>,
         health: Arc<HealthState>,
         health_aggregator: Arc<HealthAggregator>,
-        shared_prices: SharedPrices,
+        shared_prices: Arc<SharedPrices>,
     ) -> BotResult<Self> {
         Ok(Self {
             config,
@@ -382,7 +382,7 @@ pub async fn start_bot(
     database: Arc<PriceDatabase>,
     health: Arc<HealthState>,
     health_aggregator: Arc<HealthAggregator>,
-    shared_prices: SharedPrices,
+    shared_prices: Arc<SharedPrices>,
 ) -> BotResult<()> {
     let token = config.discord_token.clone();
     let intents =
@@ -757,7 +757,7 @@ async fn price_update_loop(
     config: BotConfig,
     health: Arc<HealthState>,
     database: Arc<PriceDatabase>,
-    shared_prices: SharedPrices,
+    shared_prices: Arc<SharedPrices>,
 ) {
     let crypto_name = &config.crypto_name;
     let mut consecutive_failures = 0;

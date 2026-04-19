@@ -1,6 +1,6 @@
 use crate::database::PriceDatabase;
-use crate::price_service::{fetch_shanghai_silver_price, PriceData, PricesFile};
-use crate::price_state::SharedPrices;
+use crate::price_service::fetch_shanghai_silver_price;
+use crate::price_state::{PriceData, PricesFile, SharedPrices};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;

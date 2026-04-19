@@ -59,7 +59,7 @@ pub async fn start_health_server_with_retry(
                     .route("/", get(health_check))
                     .route("/test-discord", get(test_discord_connectivity))
                     .with_state(health);
-                return Ok(axum::serve(listener, app).await.map_err(|e| e.into()));
+                return axum::serve(listener, app).await.map_err(|e| e.into());
             }
             Err(e) => {
                 error!(
