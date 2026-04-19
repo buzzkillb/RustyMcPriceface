@@ -312,17 +312,22 @@ impl DatabaseCleanup {
         let batch_size = 10000;
 
         loop {
+            // SQLite doesn't support DELETE ... LIMIT until 3.35.0
+            // So we select rowids first, then delete
             let deleted = conn.execute(
                 "DELETE FROM prices 
-                 WHERE timestamp < ? 
-                 AND EXISTS (
-                     SELECT 1 FROM price_aggregates pa 
-                     WHERE pa.crypto_name = prices.crypto_name 
-                     AND pa.bucket_start <= prices.timestamp 
-                     AND pa.bucket_start + pa.bucket_duration > prices.timestamp
-                 )
-                 LIMIT ?",
-                rusqlite::params![cutoff_time as i64, batch_size],
+                 WHERE rowid IN (
+                     SELECT rowid FROM prices
+                     WHERE timestamp < ? 
+                     AND EXISTS (
+                         SELECT 1 FROM price_aggregates pa 
+                         WHERE pa.crypto_name = prices.crypto_name 
+                         AND pa.bucket_start <= prices.timestamp 
+                         AND pa.bucket_start + pa.bucket_duration > prices.timestamp
+                     )
+                     LIMIT ?
+                 )",
+                rusqlite::params![cutoff_time as i64, batch_size as i64],
             )?;
 
             if deleted == 0 {
