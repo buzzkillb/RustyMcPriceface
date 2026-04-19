@@ -10,6 +10,7 @@ mod errors;
 mod health;
 mod health_server;
 mod price_service;
+mod price_state;
 mod shanghai_price_service;
 mod utils;
 
@@ -19,7 +20,8 @@ use database::PriceDatabase;
 use db_cleanup::DatabaseCleanup;
 use errors::BotResult;
 use health::{HealthAggregator, HealthState};
-use health_server::start_health_server;
+use health_server::start_health_server_with_retry;
+use price_state::SharedPrices;
 
 use dotenv::dotenv;
 use std::sync::Arc;
@@ -28,12 +30,27 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 const RECONNECT_DELAY_SECONDS: u64 = 30;
+const SERVICE_RESTART_DELAY_SECONDS: u64 = 5;
+
+enum ServiceHandle {
+    Bot(tokio::task::JoinHandle<()>, String),
+    Service(tokio::task::JoinHandle<()>, String),
+    HealthServer(tokio::task::JoinHandle<()>),
+}
+
+fn format_service_name(handle: &ServiceHandle) -> &str {
+    match handle {
+        ServiceHandle::Bot(_, name) => name.as_str(),
+        ServiceHandle::Service(_, name) => name.as_str(),
+        ServiceHandle::HealthServer(_) => "health_server",
+    }
+}
 
 #[tokio::main]
 async fn main() -> BotResult<()> {
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter("info,discord_bot=debug,discord_bot::database=info")
+        .with_env_filter("info,rustymcpriceface=debug")
         .init();
 
     info!("🚀 Starting RustyMcPriceface Unified Container...");
@@ -49,39 +66,74 @@ async fn main() -> BotResult<()> {
         }
     };
 
-    // Start Database Cleanup Service
+    // Create shared price state for all services and bots
+    let shared_prices = Arc::new(SharedPrices::new());
+
+    // Create health aggregator for all bots
+    let health_aggregator = Arc::new(HealthAggregator::new());
+
+    // Storage for all service handles
+    let mut service_handles: Vec<ServiceHandle> = Vec::new();
+
+    // Spawn Database Cleanup Service with supervision
     info!("🧹 Starting Database Cleanup Service...");
-    {
-        let db_clone = db.clone();
-        tokio::spawn(async move {
-            let cleanup = DatabaseCleanup::new(db_clone);
-            if let Err(e) = cleanup.run().await {
-                error!("Cleanup service crashed: {}", e);
+    let db_cleanup_db = db.clone();
+    let cleanup_handle = tokio::spawn(async move {
+        let cleanup = DatabaseCleanup::new(db_cleanup_db);
+        loop {
+            info!("🧹 Cleanup service starting...");
+            match cleanup.run().await {
+                Ok(_) => {
+                    error!("🧹 Cleanup service exited unexpectedly - restarting in {}s", SERVICE_RESTART_DELAY_SECONDS);
+                }
+                Err(e) => {
+                    error!("🧹 Cleanup service crashed: {} - restarting in {}s", e, SERVICE_RESTART_DELAY_SECONDS);
+                }
             }
-        });
-    }
+            sleep(Duration::from_secs(SERVICE_RESTART_DELAY_SECONDS)).await;
+        }
+    });
+    service_handles.push(ServiceHandle::Service(cleanup_handle, "cleanup".to_string()));
 
-    // Start Price Service
+    // Spawn Price Service with supervision
     info!("💹 Starting Price Fetching Service...");
-    {
-        let db_clone = db.clone();
-        tokio::spawn(async move {
-            if let Err(e) = price_service::run(db_clone).await {
-                error!("Price service crashed: {}", e);
+    let price_service_db = db.clone();
+    let price_service_prices = shared_prices.clone();
+    let price_handle = tokio::spawn(async move {
+        loop {
+            info!("💹 Price service starting...");
+            match price_service::run(price_service_db.clone(), price_service_prices.clone()).await {
+                Ok(_) => {
+                    error!("💹 Price service exited unexpectedly - restarting in {}s", SERVICE_RESTART_DELAY_SECONDS);
+                }
+                Err(e) => {
+                    error!("💹 Price service crashed: {} - restarting in {}s", e, SERVICE_RESTART_DELAY_SECONDS);
+                }
             }
-        });
-    }
+            sleep(Duration::from_secs(SERVICE_RESTART_DELAY_SECONDS)).await;
+        }
+    });
+    service_handles.push(ServiceHandle::Service(price_handle, "price_service".to_string()));
 
-    // Start Shanghai Silver Price Service
+    // Spawn Shanghai Silver Price Service with supervision
     info!("🏭 Starting Shanghai Silver Price Service...");
-    {
-        let db_clone = db.clone();
-        tokio::spawn(async move {
-            if let Err(e) = shanghai_price_service::run(db_clone).await {
-                error!("Shanghai price service crashed: {}", e);
+    let shanghai_db = db.clone();
+    let shanghai_prices = shared_prices.clone();
+    let shanghai_handle = tokio::spawn(async move {
+        loop {
+            info!("🏭 Shanghai price service starting...");
+            match shanghai_price_service::run(shanghai_db.clone(), shanghai_prices.clone()).await {
+                Ok(_) => {
+                    error!("🏭 Shanghai price service exited unexpectedly - restarting in {}s", SERVICE_RESTART_DELAY_SECONDS);
+                }
+                Err(e) => {
+                    error!("🏭 Shanghai price service crashed: {} - restarting in {}s", e, SERVICE_RESTART_DELAY_SECONDS);
+                }
             }
-        });
-    }
+            sleep(Duration::from_secs(SERVICE_RESTART_DELAY_SECONDS)).await;
+        }
+    });
+    service_handles.push(ServiceHandle::Service(shanghai_handle, "shanghai_price_service".to_string()));
 
     // Load all bot instances
     let instances = BotConfig::load_bot_instances();
@@ -94,15 +146,11 @@ async fn main() -> BotResult<()> {
     // Global configuration for update interval
     let global_config = BotConfig::from_env()?;
 
-    // Create health aggregator for all bots
-    let health_aggregator = Arc::new(HealthAggregator::new());
-
     // Spawn a task for each bot
-    let mut handles = vec![];
-
     for (ticker, token) in instances {
         let db_clone = db.clone();
         let health_agg_clone = health_aggregator.clone();
+        let bot_prices = shared_prices.clone();
         let mut bot_config = global_config.clone();
         bot_config.crypto_name = ticker.clone();
         bot_config.discord_token = token.clone();
@@ -116,9 +164,8 @@ async fn main() -> BotResult<()> {
 
         info!("🚀 Spawning bot for {}...", ticker);
 
-        let handle = tokio::spawn(async move {
+        let bot_handle = tokio::spawn(async move {
             loop {
-                // Determine appropriate emoji for logs
                 let emoji = utils::get_crypto_emoji(&ticker);
                 info!("{} Starting {} bot...", emoji, ticker);
 
@@ -127,6 +174,7 @@ async fn main() -> BotResult<()> {
                     db_clone.clone(),
                     health_clone.clone(),
                     health_agg_clone.clone(),
+                    bot_prices.clone(),
                 )
                 .await
                 {
@@ -145,31 +193,68 @@ async fn main() -> BotResult<()> {
                 sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
             }
         });
-        handles.push(handle);
+        service_handles.push(ServiceHandle::Bot(bot_handle, ticker));
     }
 
-    // Start health check server
+    // Start health check server (non-fatal - retries but doesn't crash container)
     info!("🏥 Starting health check server...");
     let health_for_server = health_aggregator.clone();
-    tokio::spawn(async move {
-        if let Err(e) = start_health_server(health_for_server, 8080).await {
-            error!("❌ Health server failed: {}", e);
-            panic!("Health server must start successfully for container health checks");
+    let health_handle = tokio::spawn(async move {
+        match start_health_server_with_retry(health_for_server, 8080, 10).await {
+            Ok(_) => {
+                error!("🏥 Health server exited unexpectedly");
+            }
+            Err(e) => {
+                error!("🏥 Health server failed after retries: {}", e);
+            }
+        }
+        // Don't restart health server - if it can't bind, something is wrong
+        // The bots should continue running regardless
+        loop {
+            sleep(Duration::from_secs(60)).await;
         }
     });
+    service_handles.push(ServiceHandle::HealthServer(health_handle));
 
     // Give health server time to start
     sleep(Duration::from_secs(1)).await;
 
-    // Keep the main process alive
-    if !handles.is_empty() {
-        info!("✅ All bots spawned. Main process entering monitor loop.");
-        // Wait for all handles (they shouldn't return unless panicked/cancelled)
-        for handle in handles {
-            let _ = handle.await;
+    // Monitor all service handles
+    if !service_handles.is_empty() {
+        info!("✅ All services spawned. Monitoring {} services...", service_handles.len());
+
+        loop {
+            // Check all handles
+            let mut all_dead = true;
+            let mut dead_services = Vec::new();
+
+            for handle in &service_handles {
+                let is_dead = match handle {
+                    ServiceHandle::Bot(h, name) => h.is_finished(),
+                    ServiceHandle::Service(h, name) => h.is_finished(),
+                    ServiceHandle::HealthServer(h) => h.is_finished(),
+                };
+
+                if !is_dead {
+                    all_dead = false;
+                } else {
+                    dead_services.push(handle);
+                }
+            }
+
+            // If any service died, log fatal error (they should restart themselves)
+            if !dead_services.is_empty() {
+                for handle in &dead_services {
+                    let name = format_service_name(handle);
+                    error!("💀 CRITICAL: {} died unexpectedly - it should auto-restart", name);
+                }
+            }
+
+            // Sleep before next check
+            sleep(Duration::from_secs(5)).await;
         }
     } else {
-        warn!("⚠️ No bots to run. Exiting.");
+        warn!("⚠️ No services to run. Exiting.");
     }
 
     Ok(())

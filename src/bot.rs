@@ -3,6 +3,7 @@ use crate::database::PriceDatabase;
 use crate::discord_api::DiscordApi;
 use crate::errors::{BotError, BotResult};
 use crate::health::{HealthAggregator, HealthState};
+use crate::price_state::SharedPrices;
 
 use crate::charting::generate_price_chart;
 use crate::price_service::PricesFile;
@@ -20,7 +21,6 @@ use serenity::{
     Client,
 };
 use std::collections::HashMap;
-use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -49,6 +49,7 @@ pub struct Bot {
     health: Arc<HealthState>,
     health_aggregator: Arc<HealthAggregator>,
     database: Arc<PriceDatabase>,
+    shared_prices: SharedPrices,
 }
 
 impl Bot {
@@ -58,12 +59,14 @@ impl Bot {
         database: Arc<PriceDatabase>,
         health: Arc<HealthState>,
         health_aggregator: Arc<HealthAggregator>,
+        shared_prices: SharedPrices,
     ) -> BotResult<Self> {
         Ok(Self {
             config,
             health,
             health_aggregator,
             database,
+            shared_prices,
         })
     }
 
@@ -379,12 +382,13 @@ pub async fn start_bot(
     database: Arc<PriceDatabase>,
     health: Arc<HealthState>,
     health_aggregator: Arc<HealthAggregator>,
+    shared_prices: SharedPrices,
 ) -> BotResult<()> {
     let token = config.discord_token.clone();
     let intents =
         GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
-    let bot = Bot::new(config, database, health, health_aggregator)?;
+    let bot = Bot::new(config, database, health, health_aggregator, shared_prices)?;
 
     let mut client = Client::builder(&token, intents)
         .event_handler(bot)
@@ -441,9 +445,10 @@ impl EventHandler for Bot {
         let config = self.config.clone();
         let health = self.health.clone();
         let database = self.database.clone();
+        let shared_prices = self.shared_prices.clone();
 
         tokio::spawn(async move {
-            price_update_loop(http, ctx_arc, config, health, database).await;
+            price_update_loop(http, ctx_arc, config, health, database, shared_prices).await;
         });
 
         info!("Bot initialization complete!");
@@ -745,54 +750,6 @@ impl EventHandler for Bot {
     }
 }
 
-/// Read prices from the shared JSON file with retry logic
-async fn read_prices_from_file() -> BotResult<PricesFile> {
-    let file_path = "shared/prices.json";
-    const MAX_RETRIES: u32 = 3;
-
-    for attempt in 1..=MAX_RETRIES {
-        // Check if file exists
-        if !std::path::Path::new(file_path).exists() {
-            if attempt < MAX_RETRIES {
-                warn!("Prices file not found (attempt {}), retrying...", attempt);
-                sleep(Duration::from_millis(1000 * attempt as u64)).await;
-                continue;
-            }
-            return Err(BotError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Prices file not found. Make sure price-service is running.",
-            )));
-        }
-
-        match fs::read_to_string(file_path) {
-            Ok(content) => match serde_json::from_str::<PricesFile>(&content) {
-                Ok(prices) => return Ok(prices),
-                Err(e) => {
-                    error!("Failed to parse prices file (attempt {}): {}", attempt, e);
-                    if attempt < MAX_RETRIES {
-                        sleep(Duration::from_millis(1000 * attempt as u64)).await;
-                        continue;
-                    }
-                    return Err(BotError::Json(e));
-                }
-            },
-            Err(e) => {
-                error!("Failed to read prices file (attempt {}): {}", attempt, e);
-                if attempt < MAX_RETRIES {
-                    sleep(Duration::from_millis(1000 * attempt as u64)).await;
-                    continue;
-                }
-                return Err(BotError::Io(e));
-            }
-        }
-    }
-
-    Err(BotError::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "Unexpected error in prices file read retry loop",
-    )))
-}
-
 /// Main price update loop with comprehensive error handling
 async fn price_update_loop(
     http: Arc<Http>,
@@ -800,6 +757,7 @@ async fn price_update_loop(
     config: BotConfig,
     health: Arc<HealthState>,
     database: Arc<PriceDatabase>,
+    shared_prices: SharedPrices,
 ) {
     let crypto_name = &config.crypto_name;
     let mut consecutive_failures = 0;
@@ -813,7 +771,7 @@ async fn price_update_loop(
     loop {
         let loop_start = std::time::Instant::now();
 
-        let current_price = match get_crypto_price(&config, &database).await {
+        let current_price = match get_crypto_price(&config, &database, &shared_prices).await {
             Ok(price) => {
                 consecutive_failures = 0;
                 health.reset_failures();
@@ -859,25 +817,15 @@ async fn price_update_loop(
             Err(_) => 0,
         };
 
-        let custom_status = match read_prices_from_file().await {
-            Ok(shared_prices) => format_custom_status(
-                crypto_name,
-                current_price,
-                &shared_prices,
-                update_count,
-                &arrow,
-                change_percent,
-            ),
-            Err(e) => {
-                warn!("Failed to read shared prices for status: {}", e);
-                if change_percent == 0.0 && arrow == "🔄" {
-                    format!("{} Building history", arrow)
-                } else {
-                    let change_sign = if change_percent >= 0.0 { "+" } else { "" };
-                    format!("{} {}{:.2}% (1h)", arrow, change_sign, change_percent)
-                }
-            }
-        };
+        let prices_data = shared_prices.read().await;
+        let custom_status = format_custom_status(
+            crypto_name,
+            current_price,
+            &prices_data,
+            update_count,
+            &arrow,
+            change_percent,
+        );
 
         debug!("Updating nickname to: {}", nickname);
         debug!("Updating custom status to: {}", custom_status);
@@ -887,8 +835,10 @@ async fn price_update_loop(
 
         if let Err(e) = database.save_price(crypto_name, current_price).await {
             error!("Failed to save price to database: {}", e);
+            health.increment_db_failures();
         } else {
             health.update_db_timestamp();
+            health.reset_db_failures();
         }
 
         let guilds = ctx.cache.guilds();
@@ -1259,7 +1209,11 @@ fn format_custom_status(
 }
 
 /// Get current cryptocurrency price
-async fn get_crypto_price(config: &BotConfig, database: &Arc<PriceDatabase>) -> BotResult<f64> {
+async fn get_crypto_price(
+    config: &BotConfig,
+    database: &Arc<PriceDatabase>,
+    shared_prices: &SharedPrices,
+) -> BotResult<f64> {
     // For SHANGHAISILVER, read directly from database (not in prices.json)
     if config.crypto_name == "SHANGHAISILVER" {
         debug!("Getting SHANGHAISILVER price from database");
@@ -1281,17 +1235,11 @@ async fn get_crypto_price(config: &BotConfig, database: &Arc<PriceDatabase>) -> 
         }
     }
 
-    // First try to get from shared prices file
-    match read_prices_from_file().await {
-        Ok(prices) => {
-            if let Some(price_data) = prices.prices.get(&config.crypto_name) {
-                validate_price(price_data.price)?;
-                return Ok(price_data.price);
-            }
-        }
-        Err(_) => {
-            // If shared file doesn't exist or doesn't have our crypto, try direct API call
-        }
+    // First try to get from shared prices state
+    let prices = shared_prices.read().await;
+    if let Some(price_data) = prices.prices.get(&config.crypto_name) {
+        validate_price(price_data.price)?;
+        return Ok(price_data.price);
     }
 
     // Fallback to direct API call if we have a feed ID

@@ -1,5 +1,6 @@
 use crate::database::PriceDatabase;
 use crate::price_service::{fetch_shanghai_silver_price, PriceData, PricesFile};
+use crate::price_state::SharedPrices;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
@@ -41,6 +42,7 @@ fn is_sge_market_open() -> bool {
 
 pub async fn run(
     database: Arc<PriceDatabase>,
+    shared_prices: Arc<SharedPrices>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let update_interval = get_update_interval();
     info!("🚀 Starting Shanghai Silver Price Service...");
@@ -76,6 +78,14 @@ pub async fn run(
                     } else {
                         info!("💾 Saved Shanghai Silver price to database");
                     }
+
+                    // Update shared prices state first
+                    let mut shared_prices_data = shared_prices.read().await;
+                    shared_prices_data
+                        .prices
+                        .insert(CRYPTO_NAME.to_string(), price_data.clone());
+                    shared_prices.write(shared_prices_data).await;
+                    info!("📝 Updated shared prices state");
 
                     if let Err(e) = update_prices_json(&price_data) {
                         error!("❌ Failed to update prices.json: {}", e);

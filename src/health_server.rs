@@ -39,6 +39,47 @@ pub async fn start_health_server(
     Ok(())
 }
 
+pub async fn start_health_server_with_retry(
+    health: SharedHealth,
+    port: u16,
+    max_retries: u32,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let addr = format!("127.0.0.1:{}", port);
+
+    for attempt in 1..=max_retries {
+        match TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                info!(
+                    "Health check server listening on {} (attempt {})",
+                    addr, attempt
+                );
+                let app = Router::new()
+                    .route("/health", get(health_check))
+                    .route("/health/all", get(health_check_all))
+                    .route("/", get(health_check))
+                    .route("/test-discord", get(test_discord_connectivity))
+                    .with_state(health);
+                return Ok(axum::serve(listener, app).await.map_err(|e| e.into()));
+            }
+            Err(e) => {
+                error!(
+                    "Failed to bind health server to {} (attempt {}/{}): {}",
+                    addr, attempt, max_retries, e
+                );
+                if attempt < max_retries {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Failed to bind health server after {} attempts",
+        max_retries
+    )
+    .into())
+}
+
 async fn health_check(State(health): State<SharedHealth>) -> Response {
     let health = health.clone();
     let result = timeout(

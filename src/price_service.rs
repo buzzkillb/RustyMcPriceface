@@ -492,6 +492,7 @@ fn extract_first_number_after(html: &str, prefix: &str) -> Option<f64> {
 
 pub async fn run(
     database: Arc<PriceDatabase>,
+    shared_prices: Arc<SharedPrices>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Get update interval from environment
     let update_interval = std::env::var("UPDATE_INTERVAL_SECONDS")
@@ -532,12 +533,15 @@ pub async fn run(
             Ok(prices) => {
                 consecutive_failures = 0; // Reset failure counter on success
 
-                // Store in JSON file (for backward compatibility)
+                // Write to shared state FIRST (atomic update)
+                shared_prices.write(prices.clone()).await;
+
+                // THEN persist to file (for backward compatibility / debugging)
                 if let Err(e) = write_prices_to_file(&prices, &file_path).await {
                     error!("Failed to write prices to JSON: {}", e);
                 }
 
-                // Store in SQLite database using shared pool
+                // Store in database using shared pool
                 for (crypto, price_data) in &prices.prices {
                     if let Err(e) = database.save_price(crypto, price_data.price).await {
                         error!("Failed to store {} price in database: {}", crypto, e);

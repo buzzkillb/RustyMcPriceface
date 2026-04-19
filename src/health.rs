@@ -14,6 +14,7 @@ pub struct HealthState {
     pub consecutive_failures: Arc<AtomicU64>,
     pub gateway_failures: Arc<AtomicU64>,
     pub discord_test_failures: Arc<AtomicU64>,
+    pub db_failures: Arc<AtomicU64>,
     pub start_time: Arc<AtomicU64>,
     pub bot_name: String,
 }
@@ -32,6 +33,7 @@ impl HealthState {
             consecutive_failures: Arc::new(AtomicU64::new(0)),
             gateway_failures: Arc::new(AtomicU64::new(0)),
             discord_test_failures: Arc::new(AtomicU64::new(0)),
+            db_failures: Arc::new(AtomicU64::new(0)),
             start_time: Arc::new(AtomicU64::new(start)),
             bot_name,
         }
@@ -93,6 +95,14 @@ impl HealthState {
         self.discord_test_failures.store(0, Ordering::Relaxed);
     }
 
+    pub fn increment_db_failures(&self) {
+        self.db_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reset_db_failures(&self) {
+        self.db_failures.store(0, Ordering::Relaxed);
+    }
+
     pub fn get_uptime_seconds(&self) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -116,6 +126,7 @@ impl HealthState {
         let failures = self.consecutive_failures.load(Ordering::Relaxed);
         let gateway_failures = self.gateway_failures.load(Ordering::Relaxed);
         let discord_test_failures = self.discord_test_failures.load(Ordering::Relaxed);
+        let db_failures = self.db_failures.load(Ordering::Relaxed);
 
         // Consider unhealthy if:
         // - No price update in last 5 minutes
@@ -125,6 +136,7 @@ impl HealthState {
         // - More than 3 consecutive failures
         // - More than 5 gateway failures (indicates broken Discord connection)
         // - More than 3 Discord test failures (indicates connection issues)
+        // - More than 3 DB write failures (indicates DB issues)
         // Treat 0 (never updated) as using start_time for staleness check
         let price_stale = last_price > 0 && now.saturating_sub(last_price) > 300;
         let db_stale = last_db > 0 && now.saturating_sub(last_db) > 300;
@@ -134,6 +146,7 @@ impl HealthState {
         let too_many_failures = failures > 3;
         let gateway_broken = gateway_failures > 5;
         let discord_test_broken = discord_test_failures > 3;
+        let db_broken = db_failures > 3;
 
         !price_stale
             && !db_stale
@@ -142,6 +155,7 @@ impl HealthState {
             && !too_many_failures
             && !gateway_broken
             && !discord_test_broken
+            && !db_broken
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -157,6 +171,7 @@ impl HealthState {
         let failures = self.consecutive_failures.load(Ordering::Relaxed);
         let gateway_failures = self.gateway_failures.load(Ordering::Relaxed);
         let discord_test_failures = self.discord_test_failures.load(Ordering::Relaxed);
+        let db_failures = self.db_failures.load(Ordering::Relaxed);
         let uptime = self.get_uptime_seconds();
 
         json!({
@@ -171,6 +186,7 @@ impl HealthState {
             "consecutive_failures": failures,
             "gateway_failures": gateway_failures,
             "discord_test_failures": discord_test_failures,
+            "db_failures": db_failures,
             "seconds_since_price_update": now.saturating_sub(last_price),
             "seconds_since_db_write": now.saturating_sub(last_db),
             "seconds_since_discord_update": now.saturating_sub(last_discord),
