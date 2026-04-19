@@ -122,7 +122,20 @@ class PriceBot(discord.Client):
             return None
         return price
 
-    async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str):
+    async def get_btc_price(self) -> Optional[float]:
+        """Get current BTC price for conversion."""
+        try:
+            btc_price = await self.price_service.get_price("BTC")
+            if btc_price and btc_price > 0:
+                return btc_price
+            # Fallback to database
+            db_price = await self.db.get_latest_price("BTC")
+            return db_price
+        except Exception as e:
+            logger.debug(f"Could not get BTC price: {e}")
+            return None
+
+    async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, btc_price: Optional[float], show_btc: bool):
         """Update nickname and custom status."""
         try:
             guilds = self.guilds
@@ -132,8 +145,13 @@ class PriceBot(discord.Client):
             formatted_price = format_price(price)
             nickname = f"{display_crypto.upper()} {formatted_price}"
             
-            change_sign = "+" if change_percent >= 0 else ""
-            status_text = f"{change_sign}{change_percent:.2f}% (1h)"
+            # Cycle between BTC value and 1h percentage
+            if show_btc and btc_price and btc_price > 0 and display_crypto.upper() != "BTC":
+                btc_value = price / btc_price
+                status_text = f"₿{btc_value:.6f}"
+            else:
+                change_sign = "+" if change_percent >= 0 else ""
+                status_text = f"{change_sign}{change_percent:.2f}% (1h)"
             
             activity = discord.Activity(
                 type=discord.ActivityType.watching,
@@ -160,6 +178,8 @@ class PriceBot(discord.Client):
             interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
             current_price = None
             current_change = 0.0
+            btc_price = None
+            show_btc = False  # Toggle for cycling
             
             while True:
                 try:
@@ -168,10 +188,19 @@ class PriceBot(discord.Client):
                         await self.db.save_price(self.config.crypto, price)
                         current_price = price
                         current_change = await self.get_1h_change(self.config.crypto)
+                        btc_price = await self.get_btc_price()
                     
                     if current_price:
-                        await self.update_discord_presence(current_price, current_change, self.config.crypto)
-                        logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}%")
+                        await self.update_discord_presence(
+                            current_price, 
+                            current_change, 
+                            self.config.crypto,
+                            btc_price,
+                            show_btc
+                        )
+                        # Toggle for next iteration
+                        show_btc = not show_btc
+                        logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}% BTC={show_btc}")
                         
                 except Exception as e:
                     logger.error(f"Failed to update for {self.config.name}: {e}")
