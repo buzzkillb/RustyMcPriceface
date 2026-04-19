@@ -232,8 +232,21 @@ class ChartGroup(app_commands.Group):
         self.crypto_name = crypto_name
     
     @app_commands.command()
-    async def price(self, interaction: discord.Interaction, hours: int = 24):
+    @app_commands.describe(timeframe="Timeframe for the chart")
+    @app_commands.choices(timeframe=[
+        app_commands.Choice(name="1 Hour", value=1),
+        app_commands.Choice(name="6 Hours", value=6),
+        app_commands.Choice(name="12 Hours", value=12),
+        app_commands.Choice(name="24 Hours (1 Day)", value=24),
+        app_commands.Choice(name="48 Hours (2 Days)", value=48),
+        app_commands.Choice(name="168 Hours (1 Week)", value=168),
+        app_commands.Choice(name="336 Hours (2 Weeks)", value=336),
+        app_commands.Choice(name="720 Hours (30 Days)", value=720),
+        app_commands.Choice(name="2160 Hours (90 Days)", value=2160),
+    ])
+    async def price(self, interaction: discord.Interaction, timeframe: app_commands.Choice[int] = None):
         """Generate price chart."""
+        hours = timeframe.value if timeframe else 24
         await self._send_chart(interaction, self.crypto_name, hours)
     
     async def _send_chart(self, interaction: discord.Interaction, crypto: str, hours: int):

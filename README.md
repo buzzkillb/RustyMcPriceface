@@ -106,11 +106,11 @@ Each bot supports the following slash commands:
 ### /chart price
 Generates a price chart from historical data.
 
-**Usage:** `/chart price hours:24`
+**Usage:** `/chart price` (opens dropdown menu)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| hours  | int  | 24      | Number of hours of data to display (24, 48, 168, 720, etc.) |
+| timeframe | string | 24 Hours | Preset timeframes: 1h, 6h, 12h, 24h, 48h, 1w, 2w, 30d, 90d |
 
 **Available for:** All bots (shows chart for the bot's specific ticker)
 
