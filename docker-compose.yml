@@ -1,27 +1,36 @@
 services:
-  app:
-    build: .
-    container_name: rustymcpriceface
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: pricebot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     env_file:
       - .env
-    volumes:
-      - ./shared:/app/shared
     environment:
-      - RUST_LOG=info,rustymcpriceface=info,discord_bot=info
+      - DATABASE_URL=${DATABASE_URL}
       - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
-      - CLEANUP_INTERVAL_HOURS=${CLEANUP_INTERVAL_HOURS:-48}
-      - CRYPTO_FEEDS=${CRYPTO_FEEDS:-BTC:0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,ETH:0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace,SOL:0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d,DXY:yahoo_finance}
-
-    ports:
-      - "127.0.0.1:8080:8080"
+      - CRYPTO_FEEDS=${CRYPTO_FEEDS:-BTC:0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,ETH:0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace,SOL:0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d}
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/all"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+
+volumes:
+  postgres_data:
