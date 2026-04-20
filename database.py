@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
-        self.dsn = os.environ.get(
-            "DATABASE_URL",
-            "postgresql://postgres:postgres@postgres:5432/pricebot"
-        )
+        self.dsn = os.environ.get("DATABASE_URL")
+        if not self.dsn:
+            raise ValueError("DATABASE_URL environment variable is required")
     
     async def connect(self):
         """Connect to PostgreSQL and create tables."""
