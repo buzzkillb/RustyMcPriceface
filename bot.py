@@ -7,9 +7,8 @@ import io
 import logging
 import os
 import sys
-import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 
 import discord
 from discord import app_commands

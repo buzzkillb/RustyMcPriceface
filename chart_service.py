@@ -3,7 +3,6 @@ Chart generation service using matplotlib.
 """
 import io
 import logging
-import os
 from datetime import datetime
 from typing import Optional
 
@@ -12,7 +11,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
-from matplotlib.patches import FancyBboxPatch
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +49,12 @@ class ChartService:
             start_price = prices[0]
             end_price = prices[-1]
             change = ((end_price - start_price) / start_price) * 100
-            change_color = '#00d26a' if change >= 0 else '#ff4757'
             line_color = '#00d26a' if change >= 0 else '#ff4757'
             
             ax.plot(dates, prices_arr, color=line_color, linewidth=2.5, zorder=3)
             
             ax.fill_between(dates, prices_arr, 
                            alpha=0.15, color=line_color, zorder=2)
-            
-            gradient = np.linspace(0, 1, 256).reshape(256, 1)
-            gradient_plot = np.vstack([prices_arr]*256)
             
             ax.scatter(dates, prices_arr, color=line_color, s=30, zorder=4, 
                       edgecolors='#0d1117', linewidths=0.5)
