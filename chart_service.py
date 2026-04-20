@@ -33,7 +33,8 @@ class ChartService:
         timestamps: list,
         prices: list,
         crypto_name: str,
-        timeframe: str = "24h"
+        timeframe: str = "24h",
+        hours: int = 24
     ) -> Optional[bytes]:
         """Generate a price chart and return as PNG bytes."""
         if not timestamps or not prices or len(timestamps) < 2:
@@ -162,4 +163,4 @@ class ChartService:
         
         if not timeframe_str:
             timeframe_str = f"{hours}h" if hours <= 24 else f"{hours//24}d"
-        return self.generate_price_chart(timestamps, prices, crypto.upper(), timeframe_str)
+        return self.generate_price_chart(timestamps, prices, crypto.upper(), timeframe_str, hours)

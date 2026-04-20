@@ -65,7 +65,7 @@ class PriceService:
                     logger.info(f"Shanghai Silver: ${shanghai_price}")
                     return shanghai_price
                 
-                logger.warning(f"Could not extract valid Shanghai price")
+                logger.warning("Could not extract valid Shanghai price")
                 return None
                 
         except Exception as e:

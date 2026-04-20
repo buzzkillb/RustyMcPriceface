@@ -30,6 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create test .env
+        run: |
+          cp .env.example .env
+          echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/pricebot" >> .env
+
       - name: Build Docker Compose
         run: docker compose build
 
@@ -41,6 +46,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Create test .env
+        run: |
+          cp .env.example .env
+          echo "DATABASE_URL=postgresql://postgres:postgres@postgres:5432/pricebot" >> .env
 
       - name: Start services
         run: docker compose up -d
