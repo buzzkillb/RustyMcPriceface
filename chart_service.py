@@ -145,6 +145,14 @@ class ChartService:
             logger.error(f"Failed to generate chart for {crypto_name}: {e}")
             return None
     
+    def _downsample(self, timestamps: list, prices: list, max_points: int = 500) -> tuple:
+        """Downsample data to max_points for performance."""
+        if len(timestamps) <= max_points:
+            return timestamps, prices
+        
+        step = len(timestamps) // max_points
+        return timestamps[::step], prices[::step]
+    
     async def get_chart_bytes(
         self,
         db,
@@ -153,13 +161,16 @@ class ChartService:
         timeframe_str: str = None
     ) -> Optional[bytes]:
         """Get price history from DB and generate chart."""
-        history = await db.get_price_history(crypto, hours=hours)
+        limit = 500 if hours <= 24 else 1000
+        history = await db.get_price_history(crypto, hours=hours, limit=limit)
         
         if not history or len(history) < 2:
             return None
         
         timestamps = [h[0] for h in history]
         prices = [float(h[1]) for h in history]
+        
+        timestamps, prices = self._downsample(timestamps, prices)
         
         if not timeframe_str:
             timeframe_str = f"{hours}h" if hours <= 24 else f"{hours//24}d"

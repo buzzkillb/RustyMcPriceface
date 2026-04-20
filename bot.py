@@ -213,6 +213,9 @@ class PriceBot(discord.Client):
                         current_price = price
                         current_change = await self.get_1h_change(self.config.crypto)
                         conversions = await self.get_conversion_prices()
+                        
+                        for ticker, ticker_price in conversions.items():
+                            await self.db.save_price(ticker, ticker_price)
                     
                     if current_price:
                         await self.update_discord_presence(

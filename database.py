@@ -122,8 +122,8 @@ class Database:
                 return float(row['price'])
             return None
     
-    async def get_price_history(self, crypto_name: str, hours: int = 24) -> list:
-        """Get price history for a cryptocurrency."""
+    async def get_price_history(self, crypto_name: str, hours: int = 24, limit: int = 2000) -> list:
+        """Get price history for a cryptocurrency with row limit."""
         cutoff = int(time.time()) - (hours * 3600)
         
         async with self.pool.acquire() as conn:
@@ -131,7 +131,8 @@ class Database:
                 SELECT timestamp, price FROM prices
                 WHERE crypto_name = $1 AND timestamp > $2
                 ORDER BY timestamp ASC
-            """, crypto_name.upper(), cutoff)
+                LIMIT $3
+            """, crypto_name.upper(), cutoff, limit)
             
             return [(r['timestamp'], r['price']) for r in rows]
     
