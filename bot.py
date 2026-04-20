@@ -340,7 +340,7 @@ class PriceGroup(app_commands.Group):
                         db_p = await self.db.get_latest_price(ticker)
                         if db_p and db_p > 0:
                             conversions[ticker] = db_p
-                except:
+                except Exception:
                     pass
             
             history_24h = await self.db.get_price_history(crypto, hours=24)
@@ -435,6 +435,7 @@ async def run_bot(cfg: BotConfig):
         
         await asyncio.sleep(5)
     
+    await price_service.close()
     await db.disconnect()
     logger.info(f"Bot {cfg.name} stopped")
 

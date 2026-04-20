@@ -3,6 +3,7 @@ PostgreSQL database operations using asyncpg.
 """
 import logging
 import os
+import time
 from typing import Optional
 
 import asyncpg
@@ -98,7 +99,6 @@ class Database:
         if price <= 0:
             return False
         
-        import time
         timestamp = int(time.time())
         
         async with self.pool.acquire() as conn:
@@ -125,7 +125,6 @@ class Database:
     
     async def get_price_history(self, crypto_name: str, hours: int = 24) -> list:
         """Get price history for a cryptocurrency."""
-        import time
         cutoff = int(time.time()) - (hours * 3600)
         
         async with self.pool.acquire() as conn:

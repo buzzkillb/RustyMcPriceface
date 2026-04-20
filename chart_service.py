@@ -18,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 class ChartService:
-    def __init__(self):
-        self.chart_dir = os.environ.get("CHART_DIR", "/tmp/charts")
-        os.makedirs(self.chart_dir, exist_ok=True)
     
     def _format_price(self, price: float) -> str:
         """Format price nicely."""
@@ -115,7 +112,12 @@ class ChartService:
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+            if hours <= 24:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+            elif hours <= 168:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d %H:%M'))
+            else:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
             
             price_min = min(prices_arr)
