@@ -1,182 +1,88 @@
 # RustyMcPriceface
 
-Discord bot that tracks cryptocurrency and asset prices. Each bot displays its ticker's price and cycles through BTC/ETH/SOL conversions plus 1-hour percentage change.
-
-## Architecture
-
-```
-Pyth Network / Yahoo Finance / GoldSilver.ai
-                    |
-              Price Service
-                    |
-              PostgreSQL Database
-                    |
-    +-------------+-------------+-------------+
-    |             |             |             |
-  Bot BTC      Bot ETH       Bot SOL    Bot TICKER
-```
+Discord bot for tracking cryptocurrency and asset prices with beautiful charts.
 
 ## Features
 
-- Multiple bot instances run in parallel, one per ticker
-- Prices fetched from Pyth Network (crypto), Yahoo Finance (indices), GoldSilver.ai (metals)
-- Discord nicknames show ticker and current price
-- Status cycles through: BTC value, ETH value, SOL value, 1-hour change
-- All prices stored in PostgreSQL for historical tracking
-- Each bot is independent - add more by adding tokens to .env
-- Slash commands for charts and detailed price info
-- Beautiful dark-themed charts with high/low markers
+- Multiple independent bot instances, one per ticker
+- Real-time price updates via Pyth Network, Yahoo Finance, and GoldSilver.ai
+- Discord nicknames display ticker + current price
+- Status cycles through BTC/ETH/SOL conversions and 1h change
+- Historical price charts with high/low markers
+- Detailed price embeds with 24h/7d/30d percentage changes
+- PostgreSQL for persistent price history
+- Lightweight Alpine-based Docker image (~266MB)
 
-## Prerequisites
+## Quick Start
 
-- Docker and Docker Compose
-- Discord applications with bot tokens
-
-## Setup
-
-1. Copy the example environment file:
-   ```
-   cp .env.example .env
-   ```
-
-2. Edit `.env` and add your Discord bot tokens. Get tokens from https://discord.com/developers/applications
-
-3. In the Discord developer portal for each bot:
-   - Enable "Public Bot"
-   - Enable necessary intents for your bot features
-
-4. Invite each bot to your server using the OAuth2 URL in the Discord developer portal
-
-## Environment Variables
-
-### Bot Tokens
-```
-DISCORD_TOKEN_BTC=your_btc_bot_token
-DISCORD_TOKEN_ETH=your_eth_bot_token
-DISCORD_TOKEN_SOL=your_sol_bot_token
-```
-
-### Price Feed Configuration
-```
-CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,SOL:feed_id,...
-```
-Get Pyth Network feed IDs from https://insights.pyth.network/price-feeds
-
-### Special Tickers
-- DXY: Fetched via Yahoo Finance (DX-Y.NYB)
-- SSILVER: Fetched via GoldSilver.ai scraping (displays as "SSILVER" in nicknames)
-- GOLD, SILVER: Fetched via Pyth Network
-
-### Optional Settings
-```
-UPDATE_INTERVAL_SECONDS=12
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/pricebot
-```
-
-## Running
-
-### Start
-```
+```bash
+cp .env.example .env
+# Edit .env with your Discord bot tokens
 docker-compose up -d --build
 ```
 
-### Check Status
-```
-docker-compose ps
-docker-compose logs -f
-```
-
-### Stop
-```
-docker-compose down
-```
-
-## Bot Status Display
-
-Each bot cycles its status every update interval:
-- Nickname: `BTC $67,432`
-- Status cycles: `0.030582 BTC` -> `3.421 ETH` -> `285.67 SOL` -> `+1.24% (1h)` -> repeat
-
-The bot skips showing its own ticker in the conversion (BTC bot shows ETH/SOL/1h%, not BTC).
-
 ## Slash Commands
 
-Each bot supports the following slash commands:
-
 ### /chart price
-Generates a price chart from historical data with high/low markers and percentage change.
+Generate a price chart with high/low markers and percentage change.
 
-**Usage:** `/chart price timeframe:2w`
+```
+/chart price timeframe:2w
+```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| timeframe | string | 24h | Timeframe: 1h, 6h, 12h, 24h, 48h, 1w, 2w, 30d, 3m |
-
-Type any value and autocomplete will suggest options.
-
-The chart displays:
-- Price line with color indicating direction (green up, red down)
-- High/low markers with price labels
-- Current price annotation
-- Percentage change for the selected timeframe
-- Dark-themed styling
-
-**Available for:** All bots (shows chart for the bot's specific ticker)
+| Option | Default | Examples |
+|--------|---------|----------|
+| timeframe | 24h | 1h, 6h, 12h, 24h, 48h, 1w, 2w, 30d, 3m |
 
 ### /price current
-Shows the current price with conversions and percentage changes.
+Display current price with conversions and percentage changes.
 
-**Usage:** `/price current` or `/price current crypto:BTC`
-
-When called without a crypto argument, defaults to the bot's own ticker (e.g., ETH bot shows ETH price by default).
-
-Displays:
-- Current USD price
-- 24h, 7d, 30d percentage changes (green/red indicators)
-- Conversions to BTC, ETH, SOL (if applicable)
-
-**Available for:** All bots
-
-## Adding New Bots
-
-Add more tokens to `.env`:
 ```
-DISCORD_TOKEN_NEWTICKER=your_new_token
+/price current
+/price current crypto:ETH
 ```
 
-The bot will automatically spawn a new instance for each token.
+Shows USD price, 24h/7d/30d changes, and BTC/ETH/SOL conversions.
+
+## Supported Tickers
+
+| Ticker | Source |
+|--------|--------|
+| BTC, ETH, SOL, and other Pyth feeds | Pyth Network |
+| DXY | Yahoo Finance |
+| SSILVER | GoldSilver.ai |
+
+## Environment Variables
+
+```bash
+# Bot tokens - one per ticker
+DISCORD_TOKEN_BTC=your_token
+DISCORD_TOKEN_ETH=your_token
+
+# Pyth feed IDs
+CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,SOL:feed_id
+
+# Optional
+UPDATE_INTERVAL_SECONDS=12
+```
 
 ## Tech Stack
 
-- Docker with Docker Compose
-- Python 3.12
-- PostgreSQL (asyncpg)
-- discord.py (Discord API)
-- aiohttp (HTTP client)
-- matplotlib (chart generation)
-- Pyth Network (price feeds)
-- Yahoo Finance (DXY index)
-- GoldSilver.ai (Shanghai Silver)
+- Python 3.12 (Alpine)
+- discord.py
+- asyncpg / PostgreSQL
+- matplotlib
+- aiohttp
+- Docker / Docker Compose
 
 ## Project Structure
 
 ```
-.
-├── bot.py              # Main bot with Discord integration
-├── database.py         # PostgreSQL operations
-├── price_service.py    # Price fetching from various sources
-├── chart_service.py     # Chart generation with matplotlib
-├── docker-compose.yml   # Container orchestration
-├── Dockerfile          # Python container image
-├── requirements.txt    # Python dependencies
-└── .env.example        # Environment variable template
+├── bot.py            # Main bot, commands, status cycling
+├── database.py       # PostgreSQL operations
+├── price_service.py  # Price fetching
+├── chart_service.py  # Chart generation
+├── docker-compose.yml
+├── Dockerfile
+└── requirements.txt
 ```
-
-## Database
-
-Prices are stored in PostgreSQL with the following schema:
-
-- `prices`: ticker, price, timestamp
-- `price_aggregates`: aggregated price data for historical queries
-
-The database container stores data in a named volume to persist across restarts.
