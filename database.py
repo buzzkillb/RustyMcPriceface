@@ -53,7 +53,7 @@ class Database:
                     CREATE TABLE IF NOT EXISTS prices (
                         id BIGSERIAL PRIMARY KEY,
                         crypto_name TEXT NOT NULL,
-                        price REAL NOT NULL,
+                        price DOUBLE PRECISION NOT NULL,
                         timestamp BIGINT NOT NULL,
                         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                     )

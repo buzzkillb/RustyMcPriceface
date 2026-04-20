@@ -123,21 +123,20 @@ class PriceBot(discord.Client):
         """Get price, using database fallback for SSILVER."""
         price = await self.price_service.get_price(crypto)
         
-        # SSILVER: only use if it looks valid (silver is ~$30+, so > 10)
-        if crypto == "SSILVER" and (price is None or price < 10):
-            db_price = await self.db.get_latest_price(crypto)
-            if db_price and db_price > 10:
-                logger.debug(f"SSILVER: Using cached price ${db_price}")
-                return db_price
-            logger.warning(f"SSILVER: No valid price (got {price}), skipping update")
-            return None
-        
         if price is None or price <= 0:
             db_price = await self.db.get_latest_price(crypto)
             if db_price and db_price > 0:
                 logger.debug(f"Using cached {crypto} price: ${db_price}")
                 return db_price
             return None
+        
+        if crypto == "SSILVER" and price < 10:
+            db_price = await self.db.get_latest_price(crypto)
+            if db_price and db_price > 10:
+                logger.debug(f"SSILVER: Live price {price} seems low, using cached: ${db_price}")
+                return db_price
+            logger.warning(f"SSILVER: Price {price} below threshold, using anyway")
+        
         return price
 
     async def get_conversion_prices(self) -> dict:
