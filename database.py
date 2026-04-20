@@ -152,15 +152,15 @@ class Database:
         retention = 5 * 365 * ONE_DAY  # 5 years
         
         async with self.pool.acquire() as conn:
-            deleted_raw = await conn.execute("""
+            await conn.execute("""
                 DELETE FROM prices WHERE timestamp < $1
             """, now - retention)
             
-            deleted_agg = await conn.execute("""
+            await conn.execute("""
                 DELETE FROM price_aggregates WHERE bucket_start < $1
             """, now - retention)
             
-            logger.info(f"Cleanup: deleted old price data (retention: 5 years)")
+            logger.info("Cleanup: deleted old price data (retention: 5 years)")
     
     async def _run_maintenance(self):
         """Run periodic maintenance tasks."""
