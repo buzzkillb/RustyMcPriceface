@@ -161,7 +161,7 @@ class ChartService:
         timeframe_str: str = None
     ) -> Optional[bytes]:
         """Get price history from DB and generate chart."""
-        limit = 500 if hours <= 24 else 1000
+        limit = 1000
         history = await db.get_price_history(crypto, hours=hours, limit=limit)
         
         if not history or len(history) < 2:
@@ -170,8 +170,13 @@ class ChartService:
         timestamps = [h[0] for h in history]
         prices = [float(h[1]) for h in history]
         
-        timestamps, prices = self._downsample(timestamps, prices)
-        
         if not timeframe_str:
-            timeframe_str = f"{hours}h" if hours <= 24 else f"{hours//24}d"
+            if hours <= 24:
+                timeframe_str = f"{hours}h"
+            elif hours <= 720:
+                timeframe_str = f"{hours//24}d"
+            elif hours <= 8760:
+                timeframe_str = f"{hours//24}d"
+            else:
+                timeframe_str = f"{hours//720}mo"
         return self.generate_price_chart(timestamps, prices, crypto.upper(), timeframe_str, hours)
