@@ -244,6 +244,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 300
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """,
             )
         elif hours <= 720:
@@ -254,6 +255,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 3600
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """,
             )
         elif hours <= 8760:
@@ -264,6 +266,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 86400
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """,
             )
         elif hours <= 43800:
@@ -274,6 +277,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 604800
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """,
             )
         else:
@@ -284,6 +288,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 2592000
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """,
             )
 
