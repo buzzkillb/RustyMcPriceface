@@ -227,71 +227,16 @@ class Database:
 
     def _get_bucket_for_hours(self, hours: int) -> tuple:
         """Get appropriate bucket duration and SQL for given timeframe."""
-        if hours <= 24:
-            return (
-                "raw",
-                """
-                SELECT timestamp, price FROM prices
-                WHERE crypto_name = $1 AND timestamp > $2
-                ORDER BY timestamp ASC
-                LIMIT $3
-            """,
-            )
-        elif hours <= 168:
-            return (
-                "5min",
-                """
-                SELECT bucket_start as timestamp, avg_price as price 
-                FROM price_aggregates
-                WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 300
-                ORDER BY bucket_start ASC
-                LIMIT $3
-            """,
-            )
-        elif hours <= 720:
-            return (
-                "hourly",
-                """
-                SELECT bucket_start as timestamp, avg_price as price 
-                FROM price_aggregates
-                WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 3600
-                ORDER BY bucket_start ASC
-                LIMIT $3
-            """,
-            )
-        elif hours <= 8760:
-            return (
-                "daily",
-                """
-                SELECT bucket_start as timestamp, avg_price as price 
-                FROM price_aggregates
-                WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 86400
-                ORDER BY bucket_start ASC
-                LIMIT $3
-            """,
-            )
-        elif hours <= 43800:
-            return (
-                "weekly",
-                """
-                SELECT bucket_start as timestamp, avg_price as price 
-                FROM price_aggregates
-                WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 604800
-                ORDER BY bucket_start ASC
-                LIMIT $3
-            """,
-            )
-        else:
-            return (
-                "monthly",
-                """
-                SELECT bucket_start as timestamp, avg_price as price 
-                FROM price_aggregates
-                WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 2592000
-                ORDER BY bucket_start ASC
-                LIMIT $3
-            """,
-            )
+        # Always use raw prices for accurate charting
+        return (
+            "raw",
+            """
+            SELECT timestamp, price FROM prices
+            WHERE crypto_name = $1 AND timestamp > $2
+            ORDER BY timestamp ASC
+            LIMIT $3
+        """,
+        )
 
     async def get_price_history(
         self, crypto_name: str, hours: int = 24, limit: int = 2000
