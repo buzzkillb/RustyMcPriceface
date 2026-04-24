@@ -497,7 +497,16 @@ async def run_bot(cfg: BotConfig):
         except Exception as e:
             logger.error(f"Bot {cfg.name} error: {e}, reconnecting in 5s...")
 
+        try:
+            await db.disconnect()
+            await price_service.close()
+        except:
+            pass
         await asyncio.sleep(5)
+
+        db = Database()
+        await db.connect()
+        client.db = db
 
     await price_service.close()
     await db.disconnect()
