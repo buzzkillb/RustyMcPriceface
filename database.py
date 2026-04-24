@@ -116,9 +116,10 @@ class Database:
             (ONE_WEEK, 5 * 365 * ONE_DAY),  # weekly for 5 years
         ]
 
-        async with self.pool.acquire() as conn:
+async with self.pool.acquire() as conn:
             for duration, max_age in buckets:
-                bucket_start = (now // duration) * duration
+                now = int(time.time())
+                bucket_start = (now // duration) * duration - duration
                 cutoff = now - max_age
 
                 await conn.execute(
@@ -146,7 +147,7 @@ class Database:
                     )
                     GROUP BY crypto_name
                     HAVING COUNT(*) > 0
-                """,
+                    """,
                     bucket_start,
                     duration,
                     cutoff,
