@@ -215,10 +215,7 @@ class ChartService:
     ) -> Optional[bytes]:
         """Get price history from DB and generate chart."""
         max_points = 800 if hours <= 24 else 1200 if hours <= 168 else 1500
-        limit = max_points * 2
-        history = await db.get_price_history(
-            crypto, hours=hours, limit=limit, descending=True
-        )
+        history = await db.get_price_history(crypto, hours=hours, descending=True)
 
         if not history or len(history) < 2:
             return None

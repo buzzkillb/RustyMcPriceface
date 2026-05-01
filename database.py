@@ -253,16 +253,27 @@ class Database:
         query = query.replace("ORDER BY timestamp ASC", f"ORDER BY timestamp {order}")
 
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
+            if limit is None:
+                rows = await conn.fetch(query, crypto_name.upper(), cutoff)
+            else:
+                rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
 
             if not rows and bucket_type != "raw":
-                query = f"""
-                    SELECT timestamp, price FROM prices
-                    WHERE crypto_name = $1 AND timestamp > $2
-                    ORDER BY timestamp {order}
-                    LIMIT $3
-                """
-                rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
+                if limit is None:
+                    query = f"""
+                        SELECT timestamp, price FROM prices
+                        WHERE crypto_name = $1 AND timestamp > $2
+                        ORDER BY timestamp {order}
+                    """
+                    rows = await conn.fetch(query, crypto_name.upper(), cutoff)
+                else:
+                    query = f"""
+                        SELECT timestamp, price FROM prices
+                        WHERE crypto_name = $1 AND timestamp > $2
+                        ORDER BY timestamp {order}
+                        LIMIT $3
+                    """
+                    rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
 
             return [(r["timestamp"], float(r["price"])) for r in rows]
 
