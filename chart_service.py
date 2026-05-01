@@ -166,9 +166,10 @@ class ChartService:
             elif hours <= 168:
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d %H:%M"))
                 ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+                ax.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
             else:
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-                ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0))
+                ax.xaxis.set_major_locator(mdates.MonthLocator())
 
             price_min = min(prices_arr)
             price_max = max(prices_arr)
@@ -215,7 +216,9 @@ class ChartService:
     ) -> Optional[bytes]:
         """Get price history from DB and generate chart."""
         max_points = 800 if hours <= 24 else 1200 if hours <= 168 else 1500
-        history = await db.get_price_history(crypto, hours=hours, descending=True)
+        history = await db.get_price_history(
+            crypto, hours=hours, limit=None, descending=True
+        )
 
         if not history or len(history) < 2:
             return None
