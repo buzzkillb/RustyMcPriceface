@@ -239,20 +239,27 @@ class Database:
         )
 
     async def get_price_history(
-        self, crypto_name: str, hours: int = 24, limit: int = 2000
+        self,
+        crypto_name: str,
+        hours: int = 24,
+        limit: int = 2000,
+        descending: bool = False,
     ) -> list:
         """Get price history for a cryptocurrency using appropriate aggregation."""
         cutoff = int(time.time()) - (hours * 3600)
         bucket_type, query = self._get_bucket_for_hours(hours)
 
+        order = "DESC" if descending else "ASC"
+        query = query.replace("ORDER BY timestamp ASC", f"ORDER BY timestamp {order}")
+
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
 
             if not rows and bucket_type != "raw":
-                query = """
+                query = f"""
                     SELECT timestamp, price FROM prices
                     WHERE crypto_name = $1 AND timestamp > $2
-                    ORDER BY timestamp ASC
+                    ORDER BY timestamp {order}
                     LIMIT $3
                 """
                 rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
