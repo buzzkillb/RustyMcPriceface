@@ -5,7 +5,7 @@ Discord bot for tracking cryptocurrency and asset prices with beautiful charts.
 ## Features
 
 - Multiple independent bot instances, one per ticker
-- Real-time price updates via Pyth Network, Yahoo Finance, and GoldSilver.ai
+- Real-time price updates via Pyth Network, Yahoo Finance, GoldSilver.ai, and DexScreener
 - Discord nicknames display ticker + current price
 - Status cycles through BTC/ETH/SOL conversions and 1h change
 - Historical price charts with high/low markers
@@ -51,16 +51,63 @@ Shows USD price, 24h/7d/30d changes, and BTC/ETH/SOL conversions.
 | BTC, ETH, SOL, and other Pyth feeds | Pyth Network |
 | DXY | Yahoo Finance |
 | SSILVER | GoldSilver.ai |
+| Any DexScreener pair (e.g. CYB, Solana altcoins) | DexScreener |
+
+## Adding a DexScreener Token
+
+DexScreener is used for tokens that aren't listed on Pyth Network — Solana altcoins, pump.fun tokens, etc.
+
+**1. Get the pair address**
+
+Open any token's page on DexScreener and copy the pair part of the URL. The URL format is:
+
+```
+https://dexscreener.com/<chain>/<pair_address>
+        e.g. https://dexscreener.com/solana/chvehkrbncdpdr1od9eya1vp635wwfdzgxdzexxt6v96
+```
+
+Here `solana` is the chain and `chvehkrbncdpdr1od9eya1vp635wwfdzgxdzexxt6v96` is the pair address. You need **both**.
+
+**2. Add a bot token**
+
+```bash
+DISCORD_TOKEN_CYB=your_cyb_bot_token_here
+```
+
+**3. Add the pair to `DEXSCREENER_FEEDS`**
+
+Add an entry in the format `TICKER:<chain>/<pair_address>`:
+
+```bash
+DEXSCREENER_FEEDS=CYB:solana/chvehkrbncdpdr1od9eya1vp635wwfdzgxdzexxt6v96
+```
+
+Add multiple pairs by separating with commas:
+
+```bash
+DEXSCREENER_FEEDS=CYB:solana/<pair_address>,FOO:ethereum/<pair_address>
+```
+
+**4. Rebuild**
+
+```bash
+docker-compose up -d --build
+```
+
+The bot will automatically pick up the new ticker and start showing its price (including BTC/ETH/SOL conversions and charts, once it has collected enough history).
 
 ## Environment Variables
 
 ```bash
 # Bot tokens - one per ticker
 DISCORD_TOKEN_BTC=your_token
-DISCORD_TOKEN_ETH=your_token
+DISCORD_TOKEN_CYB=your_token
 
 # Pyth feed IDs
 CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,SOL:feed_id
+
+# DexScreener pairs (for tokens not on Pyth): TICKER:<chain>/<pair_address>
+DEXSCREENER_FEEDS=CYB:solana/chvehkrbncdpdr1od9eya1vp635wwfdzgxdzexxt6v96
 
 # Optional
 UPDATE_INTERVAL_SECONDS=12
