@@ -432,11 +432,8 @@ class PriceGroup(app_commands.Group):
             await interaction.response.send_message(f"Error: {e}")
 
 
-async def run_bot(cfg: BotConfig):
-    """Run a single bot with its own db connection."""
-    db = Database()
-    await db.connect()
-    price_service = PriceService()
+async def run_bot(cfg: BotConfig, db: Database, price_service: PriceService):
+    """Run a single bot, sharing the shared db pool and price service."""
     chart_service = ChartService()
     
     client = PriceBot(cfg, db, price_service, chart_service)
@@ -457,8 +454,6 @@ async def run_bot(cfg: BotConfig):
         
         await asyncio.sleep(5)
     
-    await price_service.close()
-    await db.disconnect()
     logger.info(f"Bot {cfg.name} stopped")
 
 
@@ -472,14 +467,23 @@ if __name__ == "__main__":
     logger.info(f"Found {len(configs)} bot configuration(s)")
     
     async def run_all():
-        tasks = [asyncio.create_task(run_bot(cfg)) for cfg in configs]
+        # Share a SINGLE db pool and price service across all bots so we don't
+        # exhaust PostgreSQL's connection limit (one pool per bot blows past
+        # max_connections with many bots in one process).
+        db = Database()
+        await db.connect()
+        price_service = PriceService()
         
         try:
+            tasks = [asyncio.create_task(run_bot(cfg, db, price_service)) for cfg in configs]
             await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            await price_service.close()
+            await db.disconnect()
     
     asyncio.run(run_all())

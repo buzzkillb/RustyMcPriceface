@@ -31,7 +31,7 @@ class Database:
             self.pool = await asyncpg.create_pool(
                 self.dsn,
                 min_size=2,
-                max_size=10,
+                max_size=20,
             )
             await self._create_tables()
             logger.info("Connected to PostgreSQL")
