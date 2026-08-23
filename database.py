@@ -24,6 +24,7 @@ class Database:
             raise ValueError("DATABASE_URL environment variable is required")
         self._last_cleanup = 0
         self._last_aggregate = 0
+        self._maintenance_lock = asyncio.Lock()
     
     async def connect(self):
         """Connect to PostgreSQL and create tables."""
@@ -66,6 +67,14 @@ class Database:
                 await conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_prices_crypto_timestamp 
                         ON prices(crypto_name, timestamp DESC)
+                """)
+            except Exception as e:
+                logger.warning(f"Index creation warning (may be OK): {e}")
+            
+            try:
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_prices_timestamp 
+                        ON prices(timestamp)
                 """)
             except Exception as e:
                 logger.warning(f"Index creation warning (may be OK): {e}")
@@ -147,32 +156,46 @@ class Database:
                 """, bucket_start, duration, cutoff)
     
     async def _cleanup_old_data(self):
-        """Delete price data older than retention period."""
+        """Delete price data older than retention period.
+        Raw prices are only needed for short-term charts and re-aggregation,
+        so keep them for 31 days. Aggregates are stored for 5 years.
+        """
         now = int(time.time())
-        retention = 5 * 365 * ONE_DAY  # 5 years
+        raw_retention = 31 * ONE_DAY
+        agg_retention = 5 * 365 * ONE_DAY
         
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 DELETE FROM prices WHERE timestamp < $1
-            """, now - retention)
+            """, now - raw_retention)
             
             await conn.execute("""
                 DELETE FROM price_aggregates WHERE bucket_start < $1
-            """, now - retention)
+            """, now - agg_retention)
             
-            logger.info("Cleanup: deleted old price data (retention: 5 years)")
+            logger.info(
+                "Cleanup: kept raw prices for %d days, aggregates for %d years",
+                31, 5,
+            )
     
     async def _run_maintenance(self):
-        """Run periodic maintenance tasks."""
-        now = time.time()
-        
-        if self._should_run_task(self._last_aggregate, ONE_HOUR):
-            await self._aggregate_prices()
-            self._last_aggregate = now
-        
-        if self._should_run_task(self._last_cleanup, ONE_DAY):
-            await self._cleanup_old_data()
-            self._last_cleanup = now
+        """Run periodic maintenance tasks.
+        Uses a lock and marks tasks as scheduled BEFORE running them so that
+        many concurrent save_price calls (one per bot) can't stampede and run
+        multiple expensive aggregation queries at the same time.
+        """
+        if self._maintenance_lock.locked():
+            return
+        async with self._maintenance_lock:
+            now = time.time()
+
+            if self._should_run_task(self._last_aggregate, ONE_HOUR):
+                self._last_aggregate = now
+                await self._aggregate_prices()
+
+            if self._should_run_task(self._last_cleanup, ONE_DAY):
+                self._last_cleanup = now
+                await self._cleanup_old_data()
     
     async def save_price(self, crypto_name: str, price: float) -> bool:
         """Save a price to the database."""
