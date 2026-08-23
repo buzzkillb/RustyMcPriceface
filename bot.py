@@ -66,14 +66,35 @@ def get_display_name(crypto: str) -> str:
     return DISPLAY_NAME_MAP.get(crypto.upper(), crypto.upper())
 
 
-def format_price(price: float) -> str:
-    """Format price for display."""
-    if price >= 1000:
-        return f"${price:,.0f}"
-    elif price >= 1:
-        return f"${price:,.2f}"
+def format_amount(amount: float) -> str:
+    """Format an amount with precision that scales with magnitude."""
+    if amount <= 0:
+        return "0.00"
+    elif amount >= 1000:
+        return f"{amount:,.0f}"
+    elif amount >= 100:
+        return f"{amount:,.2f}"
+    elif amount >= 1:
+        return f"{amount:,.3f}"
+    elif amount >= 0.01:
+        return f"{amount:,.4f}"
+    elif amount >= 0.0001:
+        return f"{amount:,.6f}"
+    elif amount >= 0.000001:
+        return f"{amount:,.8f}"
+    elif amount >= 0.000000001:
+        return f"{amount:,.10f}"
     else:
-        return f"${price:.6f}"
+        return f"{amount:,.12f}"
+
+
+def format_price(price: float) -> str:
+    """Format price for display, scaling precision with magnitude so
+    micro-cap assets (e.g. DexScreener pairs) stay meaningful as price moves.
+    """
+    if price <= 0:
+        return "$0.00"
+    return f"${format_amount(price)}"
 
 
 def calculate_change_percent(current: float, previous: float) -> float:
@@ -171,7 +192,7 @@ class PriceBot(discord.Client):
             
             if ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
                 converted = price / conversions[ticker]
-                status_text = f"{converted:.6f} {ticker}"
+                status_text = f"{format_amount(converted)} {ticker}"
             else:
                 change_sign = "+" if change_percent >= 0 else ""
                 status_text = f"{change_sign}{change_percent:.2f}% (1h)"
@@ -364,7 +385,7 @@ class PriceGroup(app_commands.Group):
             
             embed.add_field(
                 name="USD",
-                value=f"**${price:,.6f}**" if price < 1 else f"**${price:,.2f}**" if price >= 100 else f"**${price:,.4f}**",
+                value=f"**{format_price(price)}**",
                 inline=False
             )
             

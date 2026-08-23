@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 
 HERMES_API_URL = "https://hermes.pyth.network/api/latest_price_feeds"
 GOLDSILVER_AI_URL = "https://goldsilver.ai/metal-prices/shanghai-silver-price"
+DEXSCREENER_API_URL = "https://api.dexscreener.com/latest/dex/pairs"
 
 
 class PriceService:
     def __init__(self):
         self.feeds = self._load_feeds()
+        self.dex_feeds = self._load_dex_feeds()
         self.session: Optional[aiohttp.ClientSession] = None
     
     def _load_feeds(self) -> dict:
@@ -35,6 +37,25 @@ class PriceService:
                 feeds[name.strip().upper()] = feed_id.strip()
         
         logger.info(f"Loaded {len(feeds)} price feeds")
+        return feeds
+    
+    def _load_dex_feeds(self) -> dict:
+        """Load DexScreener pair feeds from environment.
+        Format: CYB:solana/<pair_address>,FOO:ethereum/<pair_address>
+        """
+        feeds = {}
+        feeds_str = os.environ.get("DEXSCREENER_FEEDS", "")
+        
+        for pair in feeds_str.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            if ":" in pair:
+                name, chain_pair = pair.split(":", 1)
+                feeds[name.strip().upper()] = chain_pair.strip()
+        
+        if feeds:
+            logger.info(f"Loaded {len(feeds)} DexScreener pair feeds")
         return feeds
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -125,6 +146,40 @@ class PriceService:
             logger.error(f"Failed to fetch {ticker} from Yahoo: {e}")
             return None
     
+    async def get_dexscreener_price(self, chain_pair: str) -> Optional[float]:
+        """Fetch price for a DexScreener pair (e.g. 'solana/<pair_address>')."""
+        try:
+            session = await self._get_session()
+            url = f"{DEXSCREENER_API_URL}/{chain_pair}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; RustyMcPriceface/1.0)",
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"DexScreener returned {resp.status} for {chain_pair}")
+                    return None
+                
+                data = await resp.json()
+                
+                pair = data.get("pair") or {}
+                price_str = pair.get("priceUsd")
+                
+                if not price_str:
+                    logger.warning(f"No priceUsd in DexScreener response for {chain_pair}")
+                    return None
+                
+                price = float(price_str)
+                if price <= 0:
+                    logger.warning(f"Invalid DexScreener price {price} for {chain_pair}")
+                    return None
+                
+                logger.info(f"DexScreener {chain_pair}: ${price}")
+                return price
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch {chain_pair} from DexScreener: {e}")
+            return None
+    
     async def get_price(self, crypto: str) -> Optional[float]:
         """Get price for a single cryptocurrency."""
         crypto = crypto.upper()
@@ -136,6 +191,10 @@ class PriceService:
         # Special handling for DXY (Yahoo Finance)
         if crypto == "DXY":
             return await self.get_yahoo_price("DX-Y.NYB")
+        
+        # DexScreener pairs (e.g. CYB)
+        if crypto in self.dex_feeds:
+            return await self.get_dexscreener_price(self.dex_feeds[crypto])
         
         if crypto not in self.feeds:
             logger.warning(f"No feed ID for {crypto}")
@@ -179,6 +238,10 @@ class PriceService:
         """Get prices for all configured cryptocurrencies."""
         results = {}
         for crypto in self.feeds:
+            price = await self.get_price(crypto)
+            if price:
+                results[crypto] = price
+        for crypto in self.dex_feeds:
             price = await self.get_price(crypto)
             if price:
                 results[crypto] = price
