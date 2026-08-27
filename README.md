@@ -106,6 +106,10 @@ DISCORD_TOKEN_CYB=your_token
 # Pyth feed IDs
 CRYPTO_FEEDS=BTC:feed_id,ETH:feed_id,SOL:feed_id
 
+# Pyth API key (required) - get one from https://pythdata.app
+# Keep this secret / only in .env, never commit it
+PYTH_API_KEY=your_pyth_api_key_here
+
 # DexScreener pairs (for tokens not on Pyth): TICKER:<chain>/<pair_address>
 DEXSCREENER_FEEDS=CYB:solana/chvehkrbncdpdr1od9eya1vp635wwfdzgxdzexxt6v96
 

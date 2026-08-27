@@ -64,6 +64,14 @@ class PriceService:
             self.session = aiohttp.ClientSession(timeout=timeout)
         return self.session
     
+    @staticmethod
+    def _pyth_auth_headers() -> dict:
+        """Build auth headers for Pyth API using PYTH_API_KEY if set."""
+        api_key = os.environ.get("PYTH_API_KEY", "").strip()
+        if api_key:
+            return {"Authorization": f"Bearer {api_key}"}
+        return {}
+    
     async def get_shanghai_silver_price(self) -> Optional[float]:
         """Fetch Shanghai Silver price from goldsilver.ai."""
         try:
@@ -205,9 +213,15 @@ class PriceService:
         
         try:
             session = await self._get_session()
-            async with session.get(url) as resp:
+            headers = self._pyth_auth_headers()
+            async with session.get(url, headers=headers) as resp:
                 if resp.status != 200:
-                    logger.warning(f"Pyth API returned {resp.status} for {crypto}")
+                    if resp.status == 401:
+                        logger.error(
+                            f"Pyth API returned 401 for {crypto} - PYTH_API_KEY missing or invalid"
+                        )
+                    else:
+                        logger.warning(f"Pyth API returned {resp.status} for {crypto}")
                     return None
                 
                 data = await resp.json()
