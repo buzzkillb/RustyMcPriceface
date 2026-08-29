@@ -33,8 +33,6 @@ class BotConfig:
     name: str
     token: str
     crypto: str
-    feed_id: str
-    pyth_feed_id: Optional[str] = None
 
 
 def load_bot_configs() -> list[BotConfig]:
@@ -45,12 +43,10 @@ def load_bot_configs() -> list[BotConfig]:
         if key.startswith("DISCORD_TOKEN_") and value and key != "DISCORD_TOKEN":
             name = key.replace("DISCORD_TOKEN_", "")
             crypto = os.environ.get(f"CRYPTO_{name}", name.lower())
-            feed_id = os.environ.get(f"FEED_ID_{name}", "")
             configs.append(BotConfig(
                 name=name,
                 token=value,
                 crypto=crypto,
-                feed_id=feed_id,
             ))
     
     return configs
@@ -161,20 +157,21 @@ class PriceBot(discord.Client):
         return price
 
     async def get_conversion_prices(self) -> dict:
-        """Get BTC, ETH, SOL prices for conversion."""
-        prices = {}
-        for ticker in ["BTC", "ETH", "SOL"]:
+        """Get BTC, ETH, SOL prices for conversion (fetched concurrently)."""
+        async def fetch(ticker: str) -> tuple:
             try:
                 p = await self.price_service.get_price(ticker)
                 if p and p > 0:
-                    prices[ticker] = p
-                else:
-                    db_p = await self.db.get_latest_price(ticker)
-                    if db_p and db_p > 0:
-                        prices[ticker] = db_p
+                    return ticker, p
+                db_p = await self.db.get_latest_price(ticker)
+                if db_p and db_p > 0:
+                    return ticker, db_p
             except Exception as e:
                 logger.debug(f"Could not get {ticker} price: {e}")
-        return prices
+            return ticker, None
+
+        results = await asyncio.gather(*(fetch(t) for t in ["BTC", "ETH", "SOL"]))
+        return {ticker: p for ticker, p in results if p}
 
     async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, conversions: dict, show_index: int):
         """Update nickname and custom status."""

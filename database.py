@@ -210,7 +210,10 @@ class Database:
                 VALUES ($1, $2, $3)
             """, crypto_name.upper(), price, timestamp)
         
-        asyncio.create_task(self._run_maintenance())
+        # Only spawn a maintenance task when something is actually due
+        if (await self._should_run_task(self._last_aggregate, ONE_HOUR)
+                or await self._should_run_task(self._last_cleanup, ONE_DAY)):
+            asyncio.create_task(self._run_maintenance())
         return True
     
     async def get_latest_price(self, crypto_name: str) -> Optional[float]:
@@ -242,6 +245,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 300
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """)
         elif hours <= 720:
             return ("hourly", """
@@ -249,6 +253,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 3600
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """)
         elif hours <= 8760:
             return ("daily", """
@@ -256,6 +261,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 86400
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """)
         elif hours <= 43800:
             return ("weekly", """
@@ -263,6 +269,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 604800
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """)
         else:
             return ("monthly", """
@@ -270,6 +277,7 @@ class Database:
                 FROM price_aggregates
                 WHERE crypto_name = $1 AND bucket_start > $2 AND bucket_duration = 2592000
                 ORDER BY bucket_start ASC
+                LIMIT $3
             """)
     
     async def get_price_history(self, crypto_name: str, hours: int = 24, limit: int = 2000) -> list:
@@ -294,14 +302,3 @@ class Database:
             
             return [(r['timestamp'], float(r['price'])) for r in rows]
     
-    async def get_all_latest_prices(self) -> dict:
-        """Get latest price for all cryptocurrencies."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT DISTINCT ON (crypto_name) 
-                    crypto_name, price, timestamp
-                FROM prices
-                ORDER BY crypto_name, timestamp DESC
-            """)
-            
-            return {r['crypto_name']: float(r['price']) for r in rows}

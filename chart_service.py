@@ -145,14 +145,6 @@ class ChartService:
             logger.error(f"Failed to generate chart for {crypto_name}: {e}")
             return None
     
-    def _downsample(self, timestamps: list, prices: list, max_points: int = 500) -> tuple:
-        """Downsample data to max_points for performance."""
-        if len(timestamps) <= max_points:
-            return timestamps, prices
-        
-        step = len(timestamps) // max_points
-        return timestamps[::step], prices[::step]
-    
     async def get_chart_bytes(
         self,
         db,

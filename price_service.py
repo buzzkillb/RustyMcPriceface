@@ -248,19 +248,6 @@ class PriceService:
             logger.error(f"Failed to fetch {crypto} price: {e}")
             return None
     
-    async def get_all_prices(self) -> dict:
-        """Get prices for all configured cryptocurrencies."""
-        results = {}
-        for crypto in self.feeds:
-            price = await self.get_price(crypto)
-            if price:
-                results[crypto] = price
-        for crypto in self.dex_feeds:
-            price = await self.get_price(crypto)
-            if price:
-                results[crypto] = price
-        return results
-    
     async def close(self):
         """Close the HTTP session."""
         if self.session and not self.session.closed:
