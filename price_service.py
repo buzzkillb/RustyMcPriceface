@@ -15,6 +15,27 @@ GOLDSILVER_AI_URL = "https://goldsilver.ai/metal-prices/shanghai-silver-price"
 DEXSCREENER_API_URL = "https://api.dexscreener.com/latest/dex/pairs"
 
 
+# Fallback price sources for feeds not covered by our Pyth Pro grant.
+# Format: TICKER -> ("yahoo", symbol) | ("coingecko", coin_id) | ("dexscreener", chain/pair)
+# Tried in order when the Pyth fetch fails (401/403/404/network).
+FALLBACK_SOURCES = {
+    # Equities (equity feeds are a separate paid Pyth tier)
+    "MSTR": [("yahoo", "MSTR")],
+    "HOOD": [("yahoo", "HOOD")],
+    "SBET": [("yahoo", "SBET")],
+    # Crypto not in our grant
+    "AVAX": [("yahoo", "AVAX-USD"), ("coingecko", "avalanche-2")],
+    "SEI": [("yahoo", "SEI-USD"), ("coingecko", "sei-network")],
+    "XPL": [("yahoo", "XPL-USD"), ("coingecko", "plasma")],
+    "SUI": [("coingecko", "sui")],  # yahoo SUI-USD is a different token (Salmonation)
+    "ASTER": [("coingecko", "aster-2"), ("dexscreener", "solana/CQPBBre8Xuhp3yq2cTak3zdBxHjGC4foHhnw4Z6QMcBh")],
+    "FARTCOIN": [("dexscreener", "solana/Bzc9NZfMqkXR6fz1DBph7BDf9BroyEf6pnzESP7v5iiw"), ("coingecko", "fartcoin")],
+    "PUMP": [("dexscreener", "solana/2uF4Xh61rDwxnG9woyxsVQP7zuA6kLFpb3NvnRQeoiSd"), ("coingecko", "pump")],
+    "JLP": [("dexscreener", "solana/5SHjDACvwtox5nY8kpWNYyaceWjtTG8C6L821D9Gtpjf")],
+    "2Z": [("dexscreener", "solana/5Guq7ooZFtNju48kVNRzCVJmE9erW4DPcTQyrAk3z4UE")],
+}
+
+
 class PriceService:
     def __init__(self):
         self.feeds = self._load_feeds()
@@ -209,6 +230,13 @@ class PriceService:
         if crypto in self.dex_feeds:
             return await self.get_dexscreener_price(self.dex_feeds[crypto])
         
+        # Free fallback sources for feeds outside our Pyth grant
+        if crypto in FALLBACK_SOURCES:
+            price = await self.get_fallback_price(crypto)
+            if price:
+                return price
+            # fall through to Pyth attempt as last resort
+        
         if crypto not in self.feeds:
             logger.warning(f"No feed ID for {crypto}")
             return None
@@ -253,6 +281,41 @@ class PriceService:
             logger.error(f"Failed to fetch {crypto} price: {e}")
             return None
     
+    async def get_coingecko_price(self, coin_id: str) -> Optional[float]:
+        """Fetch USD price from CoinGecko free API (no key required)."""
+        try:
+            session = await self._get_session()
+            url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    logger.warning(f"CoinGecko returned {resp.status} for {coin_id}")
+                    return None
+                data = await resp.json()
+                price = data.get(coin_id, {}).get("usd")
+                return float(price) if price else None
+        except Exception as e:
+            logger.error(f"Failed to fetch {coin_id} from CoinGecko: {e}")
+            return None
+
+    async def get_fallback_price(self, crypto: str) -> Optional[float]:
+        """Try each configured fallback source in order for a ticker."""
+        for source, symbol in FALLBACK_SOURCES.get(crypto, []):
+            try:
+                if source == "yahoo":
+                    price = await self.get_yahoo_price(symbol)
+                elif source == "coingecko":
+                    price = await self.get_coingecko_price(symbol)
+                elif source == "dexscreener":
+                    price = await self.get_dexscreener_price(symbol)
+                else:
+                    price = None
+                if price and price > 0:
+                    logger.info(f"Fetched {crypto} via {source}: ${price}")
+                    return price
+            except Exception as e:
+                logger.warning(f"Fallback {source} failed for {crypto}: {e}")
+        return None
+
     async def close(self):
         """Close the HTTP session."""
         if self.session and not self.session.closed:
