@@ -199,6 +199,11 @@ class PriceService:
         # Special handling for DXY (Yahoo Finance)
         if crypto == "DXY":
             return await self.get_yahoo_price("DX-Y.NYB")
+
+        # Special handling for OIL (Yahoo Finance - commodity feeds are not
+        # part of our Pyth Pro grant)
+        if crypto == "OIL":
+            return await self.get_yahoo_price("CL=F")
         
         # DexScreener pairs (e.g. CYB)
         if crypto in self.dex_feeds:
