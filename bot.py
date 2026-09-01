@@ -109,6 +109,10 @@ class PriceBot(discord.Client):
         self.price_service = price_service
         self.chart_service = chart_service
         self.tree = app_commands.CommandTree(self)
+        # Single background update task; prevents duplicate loops stacking on
+        # every on_ready/reconnect (which caused "Cannot write to closing
+        # transport" and stuck presence).
+        self._update_task = None
         
     async def setup_hook(self):
         price_group = PriceGroup(self.db, self.price_service, self.config.crypto)
@@ -175,6 +179,10 @@ class PriceBot(discord.Client):
 
     async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, conversions: dict, show_index: int):
         """Update nickname and custom status."""
+        # Don't write to a closing/closed websocket while reconnecting. This
+        # avoids the "Cannot write to closing transport" flood during backoff.
+        if not self.is_ready():
+            return
         try:
             guilds = self.guilds
             if not guilds:
@@ -214,43 +222,63 @@ class PriceBot(discord.Client):
             logger.error(f"Failed to update Discord presence: {e}")
 
     async def start_price_updates(self):
+        """Start the background price/presence loop once per bot."""
+        if self._update_task is not None and not self._update_task.done():
+            logger.debug(f"{self.config.name}: update loop already running")
+            return
+        self._update_task = asyncio.create_task(self._update_price_loop())
+        logger.debug(f"{self.config.name}: started update loop")
+
+    async def _update_price_loop(self):
         """Background task to update price and Discord presence periodically."""
-        async def update_loop():
-            interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
-            current_price = None
-            current_change = 0.0
-            conversions = {}
-            show_index = 0  # Cycles: 0=BTC, 1=ETH, 2=SOL, 3=1h%, then repeats
-            
-            while True:
-                try:
-                    price = await self.get_price_for_crypto(self.config.crypto)
-                    if price and price > 0:
-                        await self.db.save_price(self.config.crypto, price)
-                        current_price = price
-                        current_change = await self.get_1h_change(self.config.crypto)
-                        conversions = await self.get_conversion_prices()
-                        
-                        for ticker, ticker_price in conversions.items():
-                            await self.db.save_price(ticker, ticker_price)
-                    
-                    if current_price:
-                        await self.update_discord_presence(
-                            current_price, 
-                            current_change, 
-                            self.config.crypto,
-                            conversions,
-                            show_index
-                        )
-                        show_index += 1
-                        logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}%")
-                        
-                except Exception as e:
-                    logger.error(f"Failed to update for {self.config.name}: {e}")
-                
+        interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
+        current_price = None
+        current_change = 0.0
+        conversions = {}
+        show_index = 0  # Cycles: 0=BTC, 1=ETH, 2=SOL, 3=1h%, then repeats
+
+        while True:
+            try:
+                price = await self.get_price_for_crypto(self.config.crypto)
+                if price and price > 0:
+                    await self.db.save_price(self.config.crypto, price)
+                    current_price = price
+                    current_change = await self.get_1h_change(self.config.crypto)
+                    conversions = await self.get_conversion_prices()
+
+                    for ticker, ticker_price in conversions.items():
+                        await self.db.save_price(ticker, ticker_price)
+
+                if current_price:
+                    await self.update_discord_presence(
+                        current_price,
+                        current_change,
+                        self.config.crypto,
+                        conversions,
+                        show_index
+                    )
+                    show_index += 1
+                    logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}%")
+
+            except Exception as e:
+                logger.error(f"Failed to update for {self.config.name}: {e}")
+
+            # Heartbeat for the Docker healthcheck. Touched every loop so the
+            # container is only considered healthy while the event loop is
+            # actually alive and progressing. If the loop hangs, the file stops
+            # updating and Docker restarts the container (self-healing).
+            try:
+                import time
+                with open("/tmp/pricebot.heartbeat", "w") as fh:
+                    fh.write(str(int(time.time())))
+            except Exception:
+                pass
+
+            try:
                 await asyncio.sleep(interval)
-        
-        asyncio.create_task(update_loop())
+            except asyncio.CancelledError:
+                logger.debug(f"{self.config.name}: update loop cancelled")
+                raise
 
 
 class ChartGroup(app_commands.Group):

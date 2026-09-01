@@ -27,6 +27,16 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-12}
       - CRYPTO_FEEDS=${CRYPTO_FEEDS:-BTC:0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43,ETH:0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace,SOL:0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d}
+    # Self-healing: if a bot wedges (e.g. presence write kept failing), the
+    # process healthcheck fails and Docker restarts the container (heartbeat
+    # file stops updating if the event loop hangs). Combined
+    # with the restart: unless-stopped policy, a hung bot comes back on its own.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/pricebot.heartbeat && (($(date +%s) - $(stat -c %Y /tmp/pricebot.heartbeat) < 60))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
