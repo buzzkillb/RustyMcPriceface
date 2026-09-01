@@ -32,7 +32,9 @@ services:
     # file stops updating if the event loop hangs). Combined
     # with the restart: unless-stopped policy, a hung bot comes back on its own.
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/pricebot.heartbeat && (($(date +%s) - $(stat -c %Y /tmp/pricebot.heartbeat) < 60))"]
+      # busybox sh (Alpine) does not support bash's (( )) arithmetic. Use the
+      # portable [ $(( ... )) -lt 60 ] form so the check works in the bot image.
+      test: ["CMD-SHELL", "test -f /tmp/pricebot.heartbeat && [ $(( $(date +%s) - $(stat -c %Y /tmp/pricebot.heartbeat) )) -lt 60 ]"]
       interval: 30s
       timeout: 10s
       retries: 3
