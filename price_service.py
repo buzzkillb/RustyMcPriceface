@@ -4,6 +4,7 @@ Price fetching service using Pyth Network API.
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 import aiohttp
@@ -51,10 +52,16 @@ FALLBACK_SOURCES = {
 
 
 class PriceService:
+    # Short TTL cache so 23 bots polling overlapping tickers (own price +
+    # BTC/ETH/SOL conversions) don't hammer Yahoo/CoinGecko/DexScreener with
+    # duplicate requests every cycle. Also collapses Pyth 403 retry noise.
+    CACHE_TTL = int(os.environ.get("PRICE_CACHE_TTL", "25"))
+
     def __init__(self):
         self.feeds = self._load_feeds()
         self.dex_feeds = self._load_dex_feeds()
         self.session: Optional[aiohttp.ClientSession] = None
+        self._cache: dict = {}  # ticker -> (monotonic_ts, price)
     
     def _load_feeds(self) -> dict:
         """Load feed IDs from environment."""
@@ -224,7 +231,21 @@ class PriceService:
             return None
     
     async def get_price(self, crypto: str) -> Optional[float]:
-        """Get price for a single cryptocurrency."""
+        """Get price for a single cryptocurrency (with a short TTL cache)."""
+        crypto = crypto.upper()
+        now = time.monotonic()
+        cached = self._cache.get(crypto)
+        if cached is not None:
+            ts, price = cached
+            if now - ts < self.CACHE_TTL:
+                return price
+        price = await self._get_price_uncached(crypto)
+        if price is not None and price > 0:
+            self._cache[crypto] = (now, price)
+        return price
+
+    async def _get_price_uncached(self, crypto: str) -> Optional[float]:
+        """Get price for a single cryptocurrency (no cache)."""
         crypto = crypto.upper()
         
         # Special handling for Shanghai Silver (not in Pyth feeds)

@@ -7,6 +7,7 @@ import io
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -113,6 +114,9 @@ class PriceBot(discord.Client):
         # every on_ready/reconnect (which caused "Cannot write to closing
         # transport" and stuck presence).
         self._update_task = None
+        # Last nickname written per guild, so we skip redundant member.edit
+        # calls (Discord rate-limits nickname edits hard: ~2 per 10 min/guild).
+        self._last_nicknames: dict = {}
         
     async def setup_hook(self):
         price_group = PriceGroup(self.db, self.price_service, self.config.crypto)
@@ -209,9 +213,10 @@ class PriceBot(discord.Client):
             
             for guild in guilds:
                 member = guild.get_member(self.user.id)
-                if member:
+                if member and member.nick != nickname:
                     try:
                         await member.edit(nick=nickname)
+                        self._last_nicknames[guild.id] = nickname
                     except Exception as e:
                         logger.debug(f"Could not update nickname in {guild.name}: {e}")
             
@@ -246,8 +251,11 @@ class PriceBot(discord.Client):
                     current_change = await self.get_1h_change(self.config.crypto)
                     conversions = await self.get_conversion_prices()
 
+                    # Only the bot dedicated to a ticker persists its price —
+                    # avoids 23 duplicate DB inserts per BTC/ETH/SOL per cycle.
                     for ticker, ticker_price in conversions.items():
-                        await self.db.save_price(ticker, ticker_price)
+                        if self.config.crypto.upper() == ticker:
+                            await self.db.save_price(ticker, ticker_price)
 
                 if current_price:
                     await self.update_discord_presence(
@@ -268,7 +276,6 @@ class PriceBot(discord.Client):
             # actually alive and progressing. If the loop hangs, the file stops
             # updating and Docker restarts the container (self-healing).
             try:
-                import time
                 with open("/tmp/pricebot.heartbeat", "w") as fh:
                     fh.write(str(int(time.time())))
             except Exception:
@@ -459,11 +466,11 @@ class PriceGroup(app_commands.Group):
 
 async def run_bot(cfg: BotConfig, db: Database, price_service: PriceService):
     """Run a single bot, sharing the shared db pool and price service."""
-    chart_service = ChartService()
-    
-    client = PriceBot(cfg, db, price_service, chart_service)
-    
     while True:
+        # discord.py does not support restarting a closed Client; a fresh
+        # instance must be created for each reconnect attempt.
+        chart_service = ChartService()
+        client = PriceBot(cfg, db, price_service, chart_service)
         try:
             logger.info(f"Starting bot {cfg.name}...")
             await client.start(cfg.token)
