@@ -33,6 +33,20 @@ FALLBACK_SOURCES = {
     "PUMP": [("dexscreener", "solana/2uF4Xh61rDwxnG9woyxsVQP7zuA6kLFpb3NvnRQeoiSd"), ("coingecko", "pump")],
     "JLP": [("dexscreener", "solana/5SHjDACvwtox5nY8kpWNYyaceWjtTG8C6L821D9Gtpjf")],
     "2Z": [("dexscreener", "solana/5Guq7ooZFtNju48kVNRzCVJmE9erW4DPcTQyrAk3z4UE")],
+    # Pyth grant no longer covers crypto spot (2026-09: 403 "no grant accepts
+    # this feed" even for BTC/ETH/SOL). Give every Pyth-fed ticker a free
+    # source so Pyth is never a single point of failure. Pyth is still tried
+    # first when it works, via the get_price_for_crypto fall-through.
+    "BTC": [("yahoo", "BTC-USD"), ("coingecko", "bitcoin")],
+    "ETH": [("yahoo", "ETH-USD"), ("coingecko", "ethereum")],
+    "SOL": [("yahoo", "SOL-USD"), ("coingecko", "solana")],
+    "DOGE": [("yahoo", "DOGE-USD"), ("coingecko", "dogecoin")],
+    "BNB": [("yahoo", "BNB-USD"), ("coingecko", "binancecoin")],
+    "WIF": [("coingecko", "dogwifcoin")],
+    "GOLD": [("yahoo", "GC=F"), ("coingecko", "pax-gold")],
+    "SILVER": [("yahoo", "SI=F")],
+    "EURO": [("yahoo", "EURUSD=X")],
+    "VOO": [("yahoo", "VOO")],
 }
 
 
