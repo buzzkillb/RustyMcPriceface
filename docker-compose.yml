@@ -36,7 +36,7 @@ services:
       # portable [ $(( ... )) -lt 60 ] form so the check works in the bot image.
       # Every bot writes its own heartbeat file; ALL must be fresh, so one
       # wedged bot loop triggers a container restart (self-healing).
-      test: ["CMD-SHELL", "for f in /tmp/pricebot.heartbeat.*; do test -f \"$f\" && [ $(($(date +%s) - $(stat -c %Y \"$f\") )) -lt 120 ] || exit 1; done"]
+      test: ["CMD-SHELL", "for f in /tmp/pricebot.heartbeat.*; do test -f \"$$f\" && [ $$(($$(date +%s) - $$(stat -c %Y \"$$f\") )) -lt 120 ] || exit 1; done"]
       interval: 30s
       timeout: 10s
       retries: 3
