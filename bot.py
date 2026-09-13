@@ -65,7 +65,9 @@ def get_display_name(crypto: str) -> str:
 
 def format_amount(amount: float) -> str:
     """Format an amount with precision that scales with magnitude."""
-    if amount <= 0:
+    if amount < 0:
+        return f"-{format_amount(-amount)}"
+    if amount == 0:
         return "0.00"
     elif amount >= 1000:
         return f"{amount:,.0f}"
@@ -114,9 +116,6 @@ class PriceBot(discord.Client):
         # every on_ready/reconnect (which caused "Cannot write to closing
         # transport" and stuck presence).
         self._update_task = None
-        # Last nickname written per guild, so we skip redundant member.edit
-        # calls (Discord rate-limits nickname edits hard: ~2 per 10 min/guild).
-        self._last_nicknames: dict = {}
         
     async def setup_hook(self):
         price_group = PriceGroup(self.db, self.price_service, self.config.crypto)
@@ -196,10 +195,11 @@ class PriceBot(discord.Client):
             nickname = f"{get_display_name(display_crypto)} {formatted_price}"
             
             # Cycle through: BTC value, ETH value, SOL value, 1h%
+            # (%4 so the 1h% state is actually reachable — %3 skipped it)
             tickers = ["BTC", "ETH", "SOL"]
-            ticker = tickers[show_index % 3]
+            ticker = tickers[show_index % 4] if show_index % 4 < 3 else None
             
-            if ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
+            if ticker and ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
                 converted = price / conversions[ticker]
                 status_text = f"{format_amount(converted)} {ticker}"
             else:
@@ -213,10 +213,11 @@ class PriceBot(discord.Client):
             
             for guild in guilds:
                 member = guild.get_member(self.user.id)
+                # member.nick != nickname doubles as the rate-limit throttle:
+                # only edit when Discord's stored nick actually differs.
                 if member and member.nick != nickname:
                     try:
                         await member.edit(nick=nickname)
-                        self._last_nicknames[guild.id] = nickname
                     except Exception as e:
                         logger.debug(f"Could not update nickname in {guild.name}: {e}")
             
@@ -234,9 +235,30 @@ class PriceBot(discord.Client):
         self._update_task = asyncio.create_task(self._update_price_loop())
         logger.debug(f"{self.config.name}: started update loop")
 
+    async def close(self):
+        """Tear down background tasks before the client is discarded.
+
+        run_bot() creates a fresh PriceBot per reconnect attempt; without this,
+        every reconnect leaves a zombie update loop doing DB writes and HTTP
+        fetches (N loops after N reconnects per bot).
+        """
+        task = self._update_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._update_task = None
+
     async def _update_price_loop(self):
         """Background task to update price and Discord presence periodically."""
-        interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
+        try:
+            interval = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "12"))
+        except ValueError:
+            logger.warning("UPDATE_INTERVAL_SECONDS invalid, using 12s")
+            interval = 12
+        interval = max(5, min(interval, 300))  # sanity bounds
         current_price = None
         current_change = 0.0
         conversions = {}
@@ -271,12 +293,13 @@ class PriceBot(discord.Client):
             except Exception as e:
                 logger.error(f"Failed to update for {self.config.name}: {e}")
 
-            # Heartbeat for the Docker healthcheck. Touched every loop so the
-            # container is only considered healthy while the event loop is
-            # actually alive and progressing. If the loop hangs, the file stops
-            # updating and Docker restarts the container (self-healing).
+            # Heartbeat for the Docker healthcheck. Per-bot file so the healthcheck
+            # can see if ANY single bot's loop wedged, not just all of them. Touched
+            # every cycle; a stale file means that bot's event loop stopped
+            # progressing and the container gets restarted (self-healing).
             try:
-                with open("/tmp/pricebot.heartbeat", "w") as fh:
+                safe_name = "".join(c if c.isalnum() else "_" for c in self.config.name)
+                with open(f"/tmp/pricebot.heartbeat.{safe_name}", "w") as fh:
                     fh.write(str(int(time.time())))
             except Exception:
                 pass
@@ -373,6 +396,11 @@ class PriceGroup(app_commands.Group):
         """Get current price of a cryptocurrency with conversions."""
         crypto = (crypto or self.default_crypto).upper()
         
+        # Defer first: this handler does 4+ network round trips (price +
+        # 3 conversions + 3 history queries) which can exceed Discord's 3s
+        # interaction token window. defer() gives us 15 minutes.
+        await interaction.response.defer()
+        
         try:
             price = await self.db.get_latest_price(crypto)
             if not price:
@@ -381,7 +409,7 @@ class PriceGroup(app_commands.Group):
                     await self.db.save_price(crypto, fresh_price)
                     price = fresh_price
                 else:
-                    await interaction.response.send_message(f"No price data for {crypto}")
+                    await interaction.followup.send(f"No price data for {crypto}")
                     return
             
             conversions = {}
@@ -457,11 +485,11 @@ class PriceGroup(app_commands.Group):
                     inline=False
                 )
             
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
             
         except Exception as e:
             logger.error(f"Price command failed: {e}")
-            await interaction.response.send_message(f"Error: {e}")
+            await interaction.followup.send(f"Error: {e}")
 
 
 async def run_bot(cfg: BotConfig, db: Database, price_service: PriceService):
@@ -483,6 +511,10 @@ async def run_bot(cfg: BotConfig, db: Database, price_service: PriceService):
             break
         except Exception as e:
             logger.error(f"Bot {cfg.name} error: {e}, reconnecting in 5s...")
+        finally:
+            # Kill this instance's update loop so reconnects don't leave
+            # zombie loops stacking DB writes and HTTP fetches.
+            await client.close()
         
         await asyncio.sleep(5)
     

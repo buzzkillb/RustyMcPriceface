@@ -25,6 +25,7 @@ class Database:
         self._last_cleanup = 0
         self._last_aggregate = 0
         self._maintenance_lock = asyncio.Lock()
+        self._maintenance_task: Optional[asyncio.Task] = None
     
     async def connect(self):
         """Connect to PostgreSQL and create tables."""
@@ -107,6 +108,30 @@ class Database:
             except Exception as e:
                 logger.warning(f"Index creation warning (may be OK): {e}")
             
+            try:
+                await conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_aggregates_crypto_bucket
+                        ON price_aggregates(crypto_name, bucket_start, bucket_duration)
+                """)
+            except Exception as e:
+                # If duplicates already exist in old data, dedupe then retry once
+                logger.warning(f"Unique index creation failed ({e}); attempting dedupe")
+                try:
+                    await conn.execute("""
+                        DELETE FROM price_aggregates a
+                        USING price_aggregates b
+                        WHERE a.id > b.id
+                          AND a.crypto_name = b.crypto_name
+                          AND a.bucket_start = b.bucket_start
+                          AND a.bucket_duration = b.bucket_duration
+                    """)
+                    await conn.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_aggregates_crypto_bucket
+                            ON price_aggregates(crypto_name, bucket_start, bucket_duration)
+                    """)
+                except Exception as e2:
+                    logger.warning(f"Aggregate dedupe/index retry failed (may be OK): {e2}")
+
             logger.info("Database tables initialized")
     
     async def _should_run_task(self, last_run: float, interval: int) -> bool:
@@ -114,46 +139,57 @@ class Database:
         return (time.time() - last_run) >= interval
     
     async def _aggregate_prices(self):
-        """Aggregate raw prices into time buckets."""
+        """Aggregate raw prices into per-bucket OHLCV rows.
+
+        Groups raw prices into their OWN bucket (timestamp/duration)*duration so
+        every bucket gets a row, and upserts so re-runs fill in buckets that
+        closed after the previous pass. Uses integer division for the bucket
+        math and ON CONFLICT DO UPDATE instead of NOT EXISTS (which prevented
+        ever correcting or completing buckets).
+        """
         now = int(time.time())
-        
+
         buckets = [
             (300, 7 * ONE_DAY),      # 5-min aggregates for 7 days
             (ONE_HOUR, 30 * ONE_DAY),  # hourly aggregates for 30 days
             (ONE_DAY, 365 * ONE_DAY),  # daily aggregates for 1 year
             (ONE_WEEK, 5 * 365 * ONE_DAY),  # weekly for 5 years
         ]
-        
+
         async with self.pool.acquire() as conn:
             for duration, max_age in buckets:
-                bucket_start = (now // duration) * duration
                 cutoff = now - max_age
-                
+
+                # Upsert every bucket in the retention window. bucket_start is
+                # derived per-row from the raw timestamp, so each 5-min/hour/
+                # day/week gets its own row with its own OHLC.
                 await conn.execute("""
-                    INSERT INTO price_aggregates 
-                    (crypto_name, bucket_start, bucket_duration, open_price, high_price, 
+                    INSERT INTO price_aggregates
+                    (crypto_name, bucket_start, bucket_duration, open_price, high_price,
                      low_price, close_price, avg_price, sample_count)
-                    SELECT 
+                    SELECT
                         crypto_name,
-                        $1 as bucket_start,
+                        (timestamp / $2) * $2 as bucket_start,
                         $2 as bucket_duration,
                         (ARRAY_AGG(price ORDER BY timestamp ASC))[1] as open_price,
                         MAX(price) as high_price,
                         MIN(price) as low_price,
                         (ARRAY_AGG(price ORDER BY timestamp DESC))[1] as close_price,
                         AVG(price) as avg_price,
-                        COUNT(*) as sample_count
+                        COUNT(*)::int as sample_count
                     FROM prices
-                    WHERE timestamp >= $3 AND timestamp < $1
-                    AND NOT EXISTS (
-                        SELECT 1 FROM price_aggregates 
-                        WHERE crypto_name = prices.crypto_name 
-                        AND bucket_start = $1 
-                        AND bucket_duration = $2
-                    )
-                    GROUP BY crypto_name
+                    WHERE timestamp >= $1
+                    GROUP BY crypto_name, bucket_start
                     HAVING COUNT(*) > 0
-                """, bucket_start, duration, cutoff)
+                    ON CONFLICT (crypto_name, bucket_start, bucket_duration) DO UPDATE SET
+                        open_price = EXCLUDED.open_price,
+                        high_price = EXCLUDED.high_price,
+                        low_price = EXCLUDED.low_price,
+                        close_price = EXCLUDED.close_price,
+                        avg_price = EXCLUDED.avg_price,
+                        sample_count = EXCLUDED.sample_count,
+                        created_at = CURRENT_TIMESTAMP
+                """, cutoff, duration)
     
     async def _cleanup_old_data(self):
         """Delete price data older than retention period.
@@ -180,22 +216,28 @@ class Database:
     
     async def _run_maintenance(self):
         """Run periodic maintenance tasks.
-        Uses a lock and marks tasks as scheduled BEFORE running them so that
-        many concurrent save_price calls (one per bot) can't stampede and run
-        multiple expensive aggregation queries at the same time.
+        Uses a lock so many concurrent save_price calls (one per bot) can't
+        stampede and run multiple expensive aggregation queries at once.
+        Timestamps are committed AFTER each subtask succeeds, so a failed or
+        slow pass doesn't skip the next hour's work. Exceptions are logged
+        instead of vanishing (unreferenced tasks die silently).
         """
         if self._maintenance_lock.locked():
             return
         async with self._maintenance_lock:
-            now = time.time()
-
             if self._should_run_task(self._last_aggregate, ONE_HOUR):
-                self._last_aggregate = now
-                await self._aggregate_prices()
+                try:
+                    await self._aggregate_prices()
+                    self._last_aggregate = time.time()
+                except Exception as e:
+                    logger.error(f"Price aggregation failed: {e}")
 
             if self._should_run_task(self._last_cleanup, ONE_DAY):
-                self._last_cleanup = now
-                await self._cleanup_old_data()
+                try:
+                    await self._cleanup_old_data()
+                    self._last_cleanup = time.time()
+                except Exception as e:
+                    logger.error(f"Price cleanup failed: {e}")
     
     async def save_price(self, crypto_name: str, price: float) -> bool:
         """Save a price to the database."""
@@ -210,11 +252,18 @@ class Database:
                 VALUES ($1, $2, $3)
             """, crypto_name.upper(), price, timestamp)
         
-        # Only spawn a maintenance task when something is actually due
+        # Only spawn a maintenance task when something is actually due; keep a
+        # reference + done-callback so the exception isn't lost to the GC.
         if (await self._should_run_task(self._last_aggregate, ONE_HOUR)
                 or await self._should_run_task(self._last_cleanup, ONE_DAY)):
-            asyncio.create_task(self._run_maintenance())
+            self._maintenance_task = asyncio.create_task(self._run_maintenance())
+            self._maintenance_task.add_done_callback(self._log_task_exception)
         return True
+
+    @staticmethod
+    def _log_task_exception(task: asyncio.Task):
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(f"Maintenance task failed: {task.exception()}")
     
     async def get_latest_price(self, crypto_name: str) -> Optional[float]:
         """Get the latest price for a cryptocurrency."""
@@ -281,24 +330,34 @@ class Database:
             """)
     
     async def get_price_history(self, crypto_name: str, hours: int = 24, limit: int = 2000) -> list:
-        """Get price history for a cryptocurrency using appropriate aggregation."""
+        """Get price history for a cryptocurrency using appropriate aggregation.
+
+        Fetches the NEWEST rows first (DESC) and reverses so callers get
+        ascending order without dropping recent data when the window has more
+        points than `limit`. Previously ASC + LIMIT kept only the oldest rows,
+        silently chopping off the most recent hours/days of every chart.
+        """
         cutoff = int(time.time()) - (hours * 3600)
         bucket_type, query = self._get_bucket_for_hours(hours)
-        
+
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 query,
                 crypto_name.upper(), cutoff, limit
             )
-            
+
             if not rows and bucket_type != "raw":
                 query = """
                     SELECT timestamp, price FROM prices
                     WHERE crypto_name = $1 AND timestamp > $2
-                    ORDER BY timestamp ASC
+                    ORDER BY timestamp DESC
                     LIMIT $3
                 """
                 rows = await conn.fetch(query, crypto_name.upper(), cutoff, limit)
-            
-            return [(r['timestamp'], float(r['price'])) for r in rows]
+
+            # rows are newest-first from SQL; return oldest-first to callers
+            return [
+                (r['timestamp'], float(r['price']))
+                for r in reversed(rows)
+            ]
     

@@ -1,6 +1,7 @@
 """
 Price fetching service using Pyth Network API.
 """
+import asyncio
 import logging
 import os
 import re
@@ -62,6 +63,7 @@ class PriceService:
         self.dex_feeds = self._load_dex_feeds()
         self.session: Optional[aiohttp.ClientSession] = None
         self._cache: dict = {}  # ticker -> (monotonic_ts, price)
+        self._inflight: dict = {}  # ticker -> asyncio.Task (stampede coalescing)
     
     def _load_feeds(self) -> dict:
         """Load feed IDs from environment."""
@@ -102,8 +104,15 @@ class PriceService:
     
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
+            # Build the session outside the assignment so a failure between
+            # creation and assignment can't orphan a session (23 bots can hit
+            # this concurrently on first call).
             timeout = aiohttp.ClientTimeout(total=15)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+            session = aiohttp.ClientSession(timeout=timeout)
+            if self.session is None or self.session.closed:
+                self.session = session
+            else:
+                await session.close()  # another task won the race
         return self.session
     
     @staticmethod
@@ -132,7 +141,7 @@ class PriceService:
                 
                 # Extract number after "Shanghai Spot" and "$"
                 shanghai_price = self._extract_price_after(text, "Shanghai Spot")
-                if shanghai_price and shanghai_price > 10:
+                if shanghai_price and shanghai_price > 1:
                     logger.info(f"Shanghai Silver: ${shanghai_price}")
                     return shanghai_price
                 
@@ -231,7 +240,11 @@ class PriceService:
             return None
     
     async def get_price(self, crypto: str) -> Optional[float]:
-        """Get price for a single cryptocurrency (with a short TTL cache)."""
+        """Get price with a short TTL cache and in-flight coalescing.
+
+        When many bots request the same expired ticker simultaneously, only one
+        upstream fetch runs; the rest await the same task.
+        """
         crypto = crypto.upper()
         now = time.monotonic()
         cached = self._cache.get(crypto)
@@ -239,10 +252,28 @@ class PriceService:
             ts, price = cached
             if now - ts < self.CACHE_TTL:
                 return price
-        price = await self._get_price_uncached(crypto)
-        if price is not None and price > 0:
-            self._cache[crypto] = (now, price)
-        return price
+
+        task = self._inflight.get(crypto)
+        if task is None:
+            task = asyncio.create_task(self._fetch_and_cache(crypto))
+            self._inflight[crypto] = task
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return None
+
+    async def _fetch_and_cache(self, crypto: str) -> Optional[float]:
+        """Run the real fetch and store the result on success."""
+        try:
+            price = await self._get_price_uncached(crypto)
+            if price is not None and price > 0:
+                # Stamp at completion: a slow 10s fetch still gets a full TTL
+                self._cache[crypto] = (time.monotonic(), price)
+            return price
+        finally:
+            self._inflight.pop(crypto, None)
 
     async def _get_price_uncached(self, crypto: str) -> Optional[float]:
         """Get price for a single cryptocurrency (no cache)."""
@@ -265,29 +296,39 @@ class PriceService:
         if crypto in self.dex_feeds:
             return await self.get_dexscreener_price(self.dex_feeds[crypto])
         
-        # Free fallback sources for feeds outside our Pyth grant
+        # Free fallback sources for feeds outside our Pyth grant. Pyth first
+        # when the feed might still be entitled, then free sources.
+        if crypto in self.feeds:
+            pyth_price = await self._fetch_pyth_price(crypto)
+            if pyth_price:
+                return pyth_price
+
         if crypto in FALLBACK_SOURCES:
             price = await self.get_fallback_price(crypto)
             if price:
                 return price
-            # fall through to Pyth attempt as last resort
-        
+
         if crypto not in self.feeds:
-            logger.warning(f"No feed ID for {crypto}")
+            logger.warning(f"No feed ID or fallback source for {crypto}")
+        return None
+
+    async def _fetch_pyth_price(self, crypto: str) -> Optional[float]:
+        """Fetch a price from the Pyth Hermes API (keyed)."""
+        feed_id = self.feeds.get(crypto)
+        if not feed_id:
             return None
-        
-        feed_id = self.feeds[crypto]
         url = f"{HERMES_API_URL}?ids[]={feed_id}"
-        
+
         try:
             session = await self._get_session()
             headers = self._pyth_auth_headers()
             async with session.get(url, headers=headers) as resp:
                 if resp.status != 200:
-                    if resp.status == 401:
-                        logger.error(
-                            f"Pyth API returned 401 for {crypto} - PYTH_API_KEY missing or invalid"
-                        )
+                    if resp.status in (401, 403):
+                        # 401 = bad/missing key, 403 = feed not entitled.
+                        # Debug level: this is expected for grant-gapped feeds
+                        # and the fallback chain handles it.
+                        logger.debug(f"Pyth API returned {resp.status} for {crypto}")
                     else:
                         logger.warning(f"Pyth API returned {resp.status} for {crypto}")
                     return None
@@ -303,7 +344,14 @@ class PriceService:
                 if price_str is None:
                     return None
                 
-                price = int(price_str) * (10 ** expo)
+                price = int(price_str)
+                # expo is negative for most feeds: integer math first, divide
+                # once. Float pow (int * 10 ** -8) can underflow large ints.
+                expo = int(expo)
+                if expo < 0:
+                    price = price / (10 ** -expo)
+                else:
+                    price = float(price * (10 ** expo))
                 
                 if price <= 0:
                     logger.warning(f"Invalid price {price} for {crypto}")

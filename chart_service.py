@@ -40,6 +40,7 @@ class ChartService:
         if not timestamps or not prices or len(timestamps) < 2:
             return None
         
+        fig = None
         try:
             fig = plt.figure(figsize=(14, 8), facecolor='#0d1117')
             ax = fig.add_subplot(111, facecolor='#0d1117')
@@ -49,7 +50,7 @@ class ChartService:
             
             start_price = prices[0]
             end_price = prices[-1]
-            change = ((end_price - start_price) / start_price) * 100
+            change = ((end_price - start_price) / start_price * 100) if start_price != 0 else 0.0
             line_color = '#00d26a' if change >= 0 else '#ff4757'
             
             ax.plot(dates, prices_arr, color=line_color, linewidth=2.5, zorder=3)
@@ -118,7 +119,13 @@ class ChartService:
             price_min = min(prices_arr)
             price_max = max(prices_arr)
             price_range = price_max - price_min
-            ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.15)
+            if price_range <= 0:
+                # Flat price series: a zero-height ylim renders a blank axis.
+                # Pad +/-1% around the constant price (minimum epsilon 1e-9).
+                pad = max(abs(price_min) * 0.01, 1e-9)
+                ax.set_ylim(price_min - pad, price_max + pad * 1.5)
+            else:
+                ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.15)
             
             fig.autofmt_xdate()
             
@@ -138,12 +145,18 @@ class ChartService:
             )
             buf.seek(0)
             plt.close(fig)
+            fig = None
             
             return buf.read()
             
         except Exception as e:
             logger.error(f"Failed to generate chart for {crypto_name}: {e}")
             return None
+        finally:
+            # pyplot keeps a global registry: an unclosed figure on the error
+            # path leaks memory across every subsequent chart render.
+            if fig is not None:
+                plt.close(fig)
     
     async def get_chart_bytes(
         self,
