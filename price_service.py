@@ -7,6 +7,7 @@ import os
 import re
 import time
 from typing import Optional
+import xml.etree.ElementTree as ET
 
 import aiohttp
 
@@ -15,6 +16,22 @@ logger = logging.getLogger(__name__)
 HERMES_API_URL = "https://hermes.pyth.network/api/latest_price_feeds"
 GOLDSILVER_AI_URL = "https://goldsilver.ai/metal-prices/shanghai-silver-price"
 DEXSCREENER_API_URL = "https://api.dexscreener.com/latest/dex/pairs"
+
+# --- US 10-year Treasury yield sources -------------------------------------
+# REALTIME (market-tracked) yield. Yahoo's ^TNX index tracks the 10Y note's
+# yield in percentage points (e.g. 4.971 == 4.971%) and is keyless.
+US10Y_REALTIME_URL = "https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d"
+# DAILY (official government) closing yield curve. Treasury publishes the
+# par yield curve once per business day (typically ~15:30 ET); keyless XML.
+TREASURY_YIELD_CURVE_URL = (
+    "https://home.treasury.gov/resource-center/data-chart-center/"
+    "interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value={year}"
+)
+TREASURY_NS = {
+    "a": "http://www.w3.org/2005/Atom",
+    "d": "http://schemas.microsoft.com/ado/2007/08/dataservices",
+    "m": "http://schemas.microsoft.com/ado/2007/08/dataservices/metadata",
+}
 
 
 # Fallback price sources for feeds not covered by our Pyth Pro grant.
@@ -239,6 +256,95 @@ class PriceService:
             logger.error(f"Failed to fetch {chain_pair} from DexScreener: {e}")
             return None
     
+    async def get_us10y_realtime(self) -> Optional[tuple]:
+        """Realtime US 10-year Treasury yield (Yahoo ^TNX).
+
+        Returns (yield_percent, day_change_percent) or None. The change is the
+        market-tracked change since the prior close, in percentage points of
+        *yield change relative to the prior close* — i.e. it reports
+        ``regularMarketChangePercent`` which is the % move in the index value
+        (the yield itself, in percentage-point terms), matching how ^TNX is
+        quoted.
+        """
+        try:
+            session = await self._get_session()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; RustyMcPriceface/1.0)",
+            }
+            async with session.get(US10Y_REALTIME_URL, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Yahoo US10Y (^TNX) returned {resp.status}")
+                    return None
+                data = await resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if not result:
+                logger.warning("No ^TNX result from Yahoo")
+                return None
+            meta = result[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            change = meta.get("regularMarketChangePercent")
+            if price is None:
+                logger.warning("No ^TNX price in Yahoo response")
+                return None
+            return float(price), (float(change) if change is not None else None)
+        except Exception as e:
+            logger.error(f"Failed to fetch realtime US10Y yield: {e}")
+            return None
+
+    async def get_us10y_daily(self) -> Optional[tuple]:
+        """Official daily US 10-year yield from the Treasury yield curve.
+
+        Returns (date_str, yield_percent, day_change_points) where the change is
+        the difference in percentage points versus the previous business day —
+        or None. This is the government's once-per-business-day close.
+        """
+        try:
+            import datetime as _dt
+
+            session = await self._get_session()
+            year = _dt.datetime.utcnow().year
+            url = TREASURY_YIELD_CURVE_URL.format(year=year)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; RustyMcPriceface/1.0)",
+            }
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Treasury yield curve returned {resp.status}")
+                    return None
+                body = await resp.text()
+
+            root = ET.fromstring(body)
+            rows = []
+            for entry in root.findall("a:entry", TREASURY_NS):
+                props = entry.find("a:content/m:properties", TREASURY_NS)
+                if props is None:
+                    continue
+                date = None
+                ten = None
+                for child in props:
+                    tag = child.tag.split("}")[-1]
+                    if tag == "NEW_DATE":
+                        date = child.text
+                    elif tag == "BC_10YEAR":
+                        ten = child.text
+                if date and ten not in (None, ""):
+                    try:
+                        rows.append((date, float(ten)))
+                    except ValueError:
+                        continue
+            if not rows:
+                logger.warning("Treasury yield curve returned no 10Y rows")
+                return None
+            rows.sort(key=lambda r: r[0])
+            date, ten = rows[-1]
+            change = None
+            if len(rows) >= 2:
+                change = round(ten - rows[-2][1], 3)
+            return date[:10], ten, change
+        except Exception as e:
+            logger.error(f"Failed to fetch daily US10Y yield: {e}")
+            return None
+
     async def get_price(self, crypto: str) -> Optional[float]:
         """Get price with a short TTL cache and in-flight coalescing.
 

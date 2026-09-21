@@ -116,6 +116,10 @@ class PriceBot(discord.Client):
         # every on_ready/reconnect (which caused "Cannot write to closing
         # transport" and stuck presence).
         self._update_task = None
+        # Throttles for the keyless US 10Y sources: realtime (^TNX) at most
+        # every 60s, official daily Treasury close at most every hour.
+        self._us10y_realtime_cache = None
+        self._us10y_daily_cache = None
         
     async def setup_hook(self):
         price_group = PriceGroup(self.db, self.price_service, self.config.crypto)
@@ -180,7 +184,38 @@ class PriceBot(discord.Client):
         results = await asyncio.gather(*(fetch(t) for t in ["BTC", "ETH", "SOL"]))
         return {ticker: p for ticker, p in results if p}
 
-    async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, conversions: dict, show_index: int):
+    async def get_us10y(self) -> dict:
+        """Fetch US 10Y yield data (realtime + official daily), with throttling.
+
+        Realtime (Yahoo ^TNX) is refreshed at most once per 60s; the official
+        daily Treasury close at most once per hour (it only changes once a
+        business day). Both are keyless. Returns a dict that may contain any of
+        ``realtime``, ``realtime_change``, ``daily_date``, ``daily``,
+        ``daily_change``.
+        """
+        now = time.monotonic()
+        out: dict = {}
+        try:
+            rt = self._us10y_realtime_cache
+            if rt is None or now - rt[0] >= 60:
+                rt_data = await self.price_service.get_us10y_realtime()
+                self._us10y_realtime_cache = (now, rt_data)
+                rt = self._us10y_realtime_cache
+            if rt and rt[1]:
+                out["realtime"], out["realtime_change"] = rt[1]
+
+            daily = self._us10y_daily_cache
+            if daily is None or now - daily[0] >= 3600:
+                daily_data = await self.price_service.get_us10y_daily()
+                self._us10y_daily_cache = (now, daily_data)
+                daily = self._us10y_daily_cache
+            if daily and daily[1]:
+                out["daily_date"], out["daily"], out["daily_change"] = daily[1]
+        except Exception as e:
+            logger.debug(f"Could not fetch US10Y data: {e}")
+        return out
+
+    async def update_discord_presence(self, price: float, change_percent: float, display_crypto: str, conversions: dict, show_index: int, us10y: Optional[dict] = None):
         """Update nickname and custom status."""
         # Don't write to a closing/closed websocket while reconnecting. This
         # avoids the "Cannot write to closing transport" flood during backoff.
@@ -194,14 +229,21 @@ class PriceBot(discord.Client):
             formatted_price = format_price(price)
             nickname = f"{get_display_name(display_crypto)} {formatted_price}"
             
-            # Cycle through: BTC value, ETH value, SOL value, 1h%
-            # (%4 so the 1h% state is actually reachable — %3 skipped it)
+            # Cycle through: BTC value, ETH value, SOL value, 1h%, US10Y realtime
             tickers = ["BTC", "ETH", "SOL"]
-            ticker = tickers[show_index % 4] if show_index % 4 < 3 else None
+            state = show_index % 5
+            ticker = tickers[state] if state < 3 else None
             
             if ticker and ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
                 converted = price / conversions[ticker]
                 status_text = f"{format_amount(converted)} {ticker}"
+            elif state == 4 and us10y and us10y.get("realtime"):
+                rt = us10y["realtime"]
+                chg = us10y.get("realtime_change")
+                if chg is not None:
+                    status_text = f"US 10Y {rt:.3f}% ({chg:+.2f}%)"
+                else:
+                    status_text = f"US 10Y {rt:.3f}%"
             else:
                 change_sign = "+" if change_percent >= 0 else ""
                 status_text = f"{change_sign}{change_percent:.2f}% (1h)"
@@ -262,7 +304,8 @@ class PriceBot(discord.Client):
         current_price = None
         current_change = 0.0
         conversions = {}
-        show_index = 0  # Cycles: 0=BTC, 1=ETH, 2=SOL, 3=1h%, then repeats
+        us10y: dict = {}
+        show_index = 0  # Cycles: 0=BTC, 1=ETH, 2=SOL, 3=1h%, 4=US10Y, then repeats
 
         while True:
             try:
@@ -279,13 +322,18 @@ class PriceBot(discord.Client):
                         if self.config.crypto.upper() == ticker:
                             await self.db.save_price(ticker, ticker_price)
 
+                # US 10Y (realtime + official daily). Throttled internally, so
+                # this is a cheap no-op on most cycles.
+                us10y = await self.get_us10y()
+
                 if current_price:
                     await self.update_discord_presence(
                         current_price,
                         current_change,
                         self.config.crypto,
                         conversions,
-                        show_index
+                        show_index,
+                        us10y
                     )
                     show_index += 1
                     logger.debug(f"Updated {self.config.name}: {self.config.crypto} ${current_price} {current_change:+.2f}%")
@@ -449,6 +497,22 @@ class PriceGroup(app_commands.Group):
                 inline=False
             )
             
+            # US 10Y realtime yield goes on top, right under the USD price.
+            us10y = await self.get_us10y()
+            if us10y.get("realtime"):
+                rt = us10y["realtime"]
+                rt_chg = us10y.get("realtime_change")
+                if rt_chg is not None:
+                    rt_arrow = "🟢" if rt_chg >= 0 else "🔴"
+                    rt_val = f"**{rt:.3f}%** {rt_arrow} {rt_chg:+.2f}%"
+                else:
+                    rt_val = f"**{rt:.3f}%**"
+                embed.add_field(
+                    name="US 10Y (realtime)",
+                    value=rt_val,
+                    inline=False
+                )
+            
             embed.add_field(
                 name="24h",
                 value=change_block(change_24h, ""),
@@ -482,6 +546,22 @@ class PriceGroup(app_commands.Group):
                 embed.add_field(
                     name="Conversions",
                     value=conversions_text,
+                    inline=False
+                )
+            
+            # Official daily (government) 10Y close goes underneath — after the
+            # conversions/percent-change block, as requested. The change is in
+            # percentage points vs. the previous business-day close.
+            if us10y.get("daily") is not None:
+                d_val = f"**{us10y['daily']:.2f}%**"
+                if us10y.get("daily_change") is not None:
+                    dc = us10y["daily_change"]
+                    d_val += f" ({dc:+.2f} pp)"
+                if us10y.get("daily_date"):
+                    d_val += f"\n_{us10y['daily_date']} (Treasury.gov)_"
+                embed.add_field(
+                    name="US 10Y (gov daily)",
+                    value=d_val,
                     inline=False
                 )
             
