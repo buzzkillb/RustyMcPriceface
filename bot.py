@@ -109,6 +109,59 @@ def calculate_change_percent(current: float, previous: float) -> float:
     return ((current - previous) / previous) * 100
 
 
+def compute_presence_text(display_crypto: str, price: float, change_percent: float,
+                          conversions: dict, show_index: int,
+                          us10y: Optional[dict] = None) -> tuple:
+    """Return (nickname, status_text) for a bot's presence.
+
+    Invariant: the US 10-year yield belongs exclusively to the dedicated
+    US10Y ticker. Every other ticker's nickname/status must never contain
+    "10Y"/"US10Y" — they cycle BTC/ETH/SOL conversion values and 1h% only.
+    """
+    crypto = display_crypto.upper()
+    is_yield = crypto in YIELD_TICKERS
+    us10y = us10y or {}
+
+    if is_yield:
+        # Standalone yield ticker: nickname is the realtime yield itself.
+        if us10y.get("realtime"):
+            nickname = f"US10Y {us10y['realtime']:.3f}%"
+        else:
+            nickname = f"US10Y {price:.3f}%"
+        # Line 1: realtime market yield (Yahoo ^TNX, intraday).
+        # Line 2: official daily Treasury close + date, underneath.
+        rt = us10y.get("realtime")
+        if rt:
+            chg = us10y.get("realtime_change")
+            line1 = f"US 10Y {rt:.3f}%"
+            if chg is not None:
+                line1 += f" ({chg:+.2f}%)"
+            line2 = ""
+            if us10y.get("daily") is not None:
+                line2 = f"Gov daily {us10y['daily']:.2f}%"
+                if us10y.get("daily_change") is not None:
+                    line2 += f" ({us10y['daily_change']:+.2f} pp)"
+                if us10y.get("daily_date"):
+                    line2 += f" {us10y['daily_date']}"
+            status_text = f"{line1}\n{line2}" if line2 else line1
+        else:
+            status_text = f"US 10Y {price:.3f}%"
+        return nickname, status_text
+
+    # --- Non-yield tickers: BTC/ETH/SOL values and 1h% only. No 10Y here. ---
+    nickname = f"{get_display_name(crypto)} {format_price(price)}"
+    tickers = ["BTC", "ETH", "SOL"]
+    state = show_index % 4
+    ticker = tickers[state] if state < 3 else None
+    if ticker and ticker in conversions and conversions[ticker] > 0 and crypto != ticker:
+        converted = price / conversions[ticker]
+        status_text = f"{format_amount(converted)} {ticker}"
+    else:
+        change_sign = "+" if change_percent >= 0 else ""
+        status_text = f"{change_sign}{change_percent:.2f}% (1h)"
+    return nickname, status_text
+
+
 class PriceBot(discord.Client):
     def __init__(self, config: BotConfig, db: Database, price_service: PriceService, chart_service: ChartService):
         intents = discord.Intents.default()
@@ -239,50 +292,9 @@ class PriceBot(discord.Client):
             if not guilds:
                 return
             
-            # A yield ticker (US10Y) shows the yield percent, not a $ price,
-            # and its status stays on the 10Y reading (no crypto conversions).
-            is_yield = display_crypto.upper() in YIELD_TICKERS
-            if is_yield and us10y and us10y.get("realtime"):
-                nickname = f"US10Y {us10y['realtime']:.3f}%"
-            else:
-                formatted_price = format_price(price)
-                nickname = f"{get_display_name(display_crypto)} {formatted_price}"
-            
-            # Cycle through: BTC value, ETH value, SOL value, 1h%, US10Y realtime
-            tickers = ["BTC", "ETH", "SOL"]
-            state = show_index % 5
-            ticker = tickers[state] if state < 3 else None
-            
-            if is_yield and us10y and us10y.get("realtime"):
-                # Line 1: realtime market yield (Yahoo ^TNX, intraday).
-                # Line 2: official daily Treasury close + date, underneath.
-                # Discord custom status supports multi-line text.
-                rt = us10y["realtime"]
-                chg = us10y.get("realtime_change")
-                line1 = f"US 10Y {rt:.3f}%"
-                if chg is not None:
-                    line1 += f" ({chg:+.2f}%)"
-                line2 = ""
-                if us10y.get("daily") is not None:
-                    line2 = f"Gov daily {us10y['daily']:.2f}%"
-                    if us10y.get("daily_change") is not None:
-                        line2 += f" ({us10y['daily_change']:+.2f} pp)"
-                    if us10y.get("daily_date"):
-                        line2 += f" {us10y['daily_date']}"
-                status_text = f"{line1}\n{line2}" if line2 else line1
-            elif ticker and ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
-                converted = price / conversions[ticker]
-                status_text = f"{format_amount(converted)} {ticker}"
-            elif state == 4 and us10y and us10y.get("realtime"):
-                rt = us10y["realtime"]
-                chg = us10y.get("realtime_change")
-                if chg is not None:
-                    status_text = f"US 10Y {rt:.3f}% ({chg:+.2f}%)"
-                else:
-                    status_text = f"US 10Y {rt:.3f}%"
-            else:
-                change_sign = "+" if change_percent >= 0 else ""
-                status_text = f"{change_sign}{change_percent:.2f}% (1h)"
+            nickname, status_text = compute_presence_text(
+                display_crypto, price, change_percent, conversions, show_index, us10y
+            )
             
             activity = discord.Activity(
                 type=discord.ActivityType.watching,
@@ -341,7 +353,9 @@ class PriceBot(discord.Client):
         current_change = 0.0
         conversions = {}
         us10y: dict = {}
-        show_index = 0  # Cycles: 0=BTC, 1=ETH, 2=SOL, 3=1h%, 4=US10Y, then repeats
+        show_index = 0  # Non-yield tickers cycle: 0=BTC, 1=ETH, 2=SOL, 3=1h%
+        # (US10Y is a standalone ticker and is NOT part of any other bot's
+        # rotation — it only ever appears on its own dedicated bot.)
 
         while True:
             try:
@@ -363,9 +377,12 @@ class PriceBot(discord.Client):
                         if self.config.crypto.upper() == ticker:
                             await self.db.save_price(ticker, ticker_price)
 
-                # US 10Y (realtime + official daily). Throttled internally, so
-                # this is a cheap no-op on most cycles.
-                us10y = await self.get_us10y()
+                # US 10Y is exclusive to the dedicated US10Y bot; other tickers
+                # don't even fetch it (avoids needless polls from every bot).
+                if self.config.crypto.upper() in YIELD_TICKERS:
+                    us10y = await self.get_us10y()
+                else:
+                    us10y = {}
 
                 if current_price:
                     await self.update_discord_presence(
@@ -546,23 +563,9 @@ class PriceGroup(app_commands.Group):
                     inline=False
                 )
             
-            # US 10Y realtime yield goes on top, right under the USD price.
-            # For the dedicated US10Y bot the field above already IS this, so
-            # don't duplicate it.
-            us10y = await self.get_us10y()
-            if not is_yield and us10y.get("realtime"):
-                rt = us10y["realtime"]
-                rt_chg = us10y.get("realtime_change")
-                if rt_chg is not None:
-                    rt_arrow = "🟢" if rt_chg >= 0 else "🔴"
-                    rt_val = f"**{rt:.3f}%** {rt_arrow} {rt_chg:+.2f}%"
-                else:
-                    rt_val = f"**{rt:.3f}%**"
-                embed.add_field(
-                    name="US 10Y (realtime)",
-                    value=rt_val,
-                    inline=False
-                )
+            # US 10Y is a standalone ticker: only the dedicated US10Y bot shows
+            # it. Other tickers' /price embeds must not include the 10Y rows.
+            us10y = await self.get_us10y() if is_yield else {}
             
             embed.add_field(
                 name="24h",
@@ -604,9 +607,9 @@ class PriceGroup(app_commands.Group):
                 )
             
             # Official daily (government) 10Y close goes underneath — after the
-            # conversions/percent-change block, as requested. The change is in
-            # percentage points vs. the previous business-day close.
-            if us10y.get("daily") is not None:
+            # conversions/percent-change block, and ONLY on the US10Y bot. The
+            # change is in percentage points vs. the previous business-day close.
+            if is_yield and us10y.get("daily") is not None:
                 d_val = f"**{us10y['daily']:.2f}%**"
                 if us10y.get("daily_change") is not None:
                     dc = us10y["daily_change"]
