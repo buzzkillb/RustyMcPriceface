@@ -254,11 +254,22 @@ class PriceBot(discord.Client):
             ticker = tickers[state] if state < 3 else None
             
             if is_yield and us10y and us10y.get("realtime"):
+                # Line 1: realtime market yield (Yahoo ^TNX, intraday).
+                # Line 2: official daily Treasury close + date, underneath.
+                # Discord custom status supports multi-line text.
                 rt = us10y["realtime"]
                 chg = us10y.get("realtime_change")
-                status_text = f"US 10Y {rt:.3f}%"
+                line1 = f"US 10Y {rt:.3f}%"
                 if chg is not None:
-                    status_text += f" ({chg:+.2f}%)"
+                    line1 += f" ({chg:+.2f}%)"
+                line2 = ""
+                if us10y.get("daily") is not None:
+                    line2 = f"Gov daily {us10y['daily']:.2f}%"
+                    if us10y.get("daily_change") is not None:
+                        line2 += f" ({us10y['daily_change']:+.2f} pp)"
+                    if us10y.get("daily_date"):
+                        line2 += f" {us10y['daily_date']}"
+                status_text = f"{line1}\n{line2}" if line2 else line1
             elif ticker and ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
                 converted = price / conversions[ticker]
                 status_text = f"{format_amount(converted)} {ticker}"
