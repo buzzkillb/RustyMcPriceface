@@ -55,7 +55,13 @@ def load_bot_configs() -> list[BotConfig]:
 
 DISPLAY_NAME_MAP = {
     "SHANGHAISILVER": "SSILVER",
+    "US10Y": "US10Y",
 }
+
+# Tickers whose "price" is a yield percent, not a USD price. These get a
+# dedicated bot that shows the yield (not a $ prefix) and skips the
+# crypto-conversion rotations, which would be meaningless.
+YIELD_TICKERS = {"US10Y"}
 
 
 def get_display_name(crypto: str) -> str:
@@ -149,6 +155,13 @@ class PriceBot(discord.Client):
     
     async def get_price_for_crypto(self, crypto: str) -> Optional[float]:
         """Get price, using database fallback for SSILVER."""
+        # US10Y has no Pyth feed — its "price" is the realtime yield percent.
+        if crypto.upper() in YIELD_TICKERS:
+            rt = await self.price_service.get_us10y_realtime()
+            if rt and rt[0]:
+                return rt[0]
+            return await self.db.get_latest_price(crypto)
+
         price = await self.price_service.get_price(crypto)
         
         if price is None or price <= 0:
@@ -226,15 +239,27 @@ class PriceBot(discord.Client):
             if not guilds:
                 return
             
-            formatted_price = format_price(price)
-            nickname = f"{get_display_name(display_crypto)} {formatted_price}"
+            # A yield ticker (US10Y) shows the yield percent, not a $ price,
+            # and its status stays on the 10Y reading (no crypto conversions).
+            is_yield = display_crypto.upper() in YIELD_TICKERS
+            if is_yield and us10y and us10y.get("realtime"):
+                nickname = f"US10Y {us10y['realtime']:.3f}%"
+            else:
+                formatted_price = format_price(price)
+                nickname = f"{get_display_name(display_crypto)} {formatted_price}"
             
             # Cycle through: BTC value, ETH value, SOL value, 1h%, US10Y realtime
             tickers = ["BTC", "ETH", "SOL"]
             state = show_index % 5
             ticker = tickers[state] if state < 3 else None
             
-            if ticker and ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
+            if is_yield and us10y and us10y.get("realtime"):
+                rt = us10y["realtime"]
+                chg = us10y.get("realtime_change")
+                status_text = f"US 10Y {rt:.3f}%"
+                if chg is not None:
+                    status_text += f" ({chg:+.2f}%)"
+            elif ticker and ticker in conversions and conversions[ticker] > 0 and display_crypto.upper() != ticker:
                 converted = price / conversions[ticker]
                 status_text = f"{format_amount(converted)} {ticker}"
             elif state == 4 and us10y and us10y.get("realtime"):
@@ -314,7 +339,12 @@ class PriceBot(discord.Client):
                     await self.db.save_price(self.config.crypto, price)
                     current_price = price
                     current_change = await self.get_1h_change(self.config.crypto)
-                    conversions = await self.get_conversion_prices()
+                    # Yield tickers don't need crypto conversions for their
+                    # status/embed, so skip those three fetches.
+                    if self.config.crypto.upper() in YIELD_TICKERS:
+                        conversions = {}
+                    else:
+                        conversions = await self.get_conversion_prices()
 
                     # Only the bot dedicated to a ticker persists its price —
                     # avoids 23 duplicate DB inserts per BTC/ETH/SOL per cycle.
@@ -491,15 +521,25 @@ class PriceGroup(app_commands.Group):
                 color=0x00ff00 if change_24h >= 0 else 0xff0000
             )
             
-            embed.add_field(
-                name="USD",
-                value=f"**{format_price(price)}**",
-                inline=False
-            )
+            is_yield = crypto.upper() in YIELD_TICKERS
+            if is_yield:
+                embed.add_field(
+                    name="10Y yield",
+                    value=f"**{price:.3f}%**",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="USD",
+                    value=f"**{format_price(price)}**",
+                    inline=False
+                )
             
             # US 10Y realtime yield goes on top, right under the USD price.
+            # For the dedicated US10Y bot the field above already IS this, so
+            # don't duplicate it.
             us10y = await self.get_us10y()
-            if us10y.get("realtime"):
+            if not is_yield and us10y.get("realtime"):
                 rt = us10y["realtime"]
                 rt_chg = us10y.get("realtime_change")
                 if rt_chg is not None:
@@ -532,15 +572,18 @@ class PriceGroup(app_commands.Group):
             )
             
             conversions_text = ""
-            if "BTC" in conversions and conversions["BTC"] > 0 and crypto != "BTC":
-                btc_val = price / conversions["BTC"]
-                conversions_text += f"BTC: `{btc_val:.8f}`\n"
-            if "ETH" in conversions and conversions["ETH"] > 0 and crypto != "ETH":
-                eth_val = price / conversions["ETH"]
-                conversions_text += f"ETH: `{eth_val:.8f}`\n"
-            if "SOL" in conversions and conversions["SOL"] > 0 and crypto != "SOL":
-                sol_val = price / conversions["SOL"]
-                conversions_text += f"SOL: `{sol_val:.8f}`\n"
+            # Yield tickers have no meaningful crypto conversion (4.97 / BTC
+            # is nonsense), so skip the block entirely for them.
+            if not is_yield:
+                if "BTC" in conversions and conversions["BTC"] > 0 and crypto != "BTC":
+                    btc_val = price / conversions["BTC"]
+                    conversions_text += f"BTC: `{btc_val:.8f}`\n"
+                if "ETH" in conversions and conversions["ETH"] > 0 and crypto != "ETH":
+                    eth_val = price / conversions["ETH"]
+                    conversions_text += f"ETH: `{eth_val:.8f}`\n"
+                if "SOL" in conversions and conversions["SOL"] > 0 and crypto != "SOL":
+                    sol_val = price / conversions["SOL"]
+                    conversions_text += f"SOL: `{sol_val:.8f}`\n"
             
             if conversions_text:
                 embed.add_field(
