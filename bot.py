@@ -431,15 +431,19 @@ class ChartGroup(app_commands.Group):
     }
     
     def __init__(self, db: Database, chart_service: ChartService, crypto_name: str):
-        super().__init__(name="chart", description=f"{crypto_name} chart commands")
+        _kind = "yield" if crypto_name.upper() in YIELD_TICKERS else "price"
+        super().__init__(name="chart", description=f"{crypto_name} {_kind} chart commands")
         self.db = db
         self.chart_service = chart_service
         self.crypto_name = crypto_name
     
     @app_commands.command()
-    @app_commands.describe(timeframe="Timeframe (e.g., 24h, 2d, 1w, 30d, 3m)")
-    async def price(self, interaction: discord.Interaction, timeframe: str = "24h"):
-        """Generate price chart."""
+    @app_commands.describe(
+        timeframe="Timeframe (e.g., 24h, 2d, 1w, 30d, 3m)",
+        crypto="Optional: chart another ticker (e.g. US10Y) from this bot"
+    )
+    async def price(self, interaction: discord.Interaction, timeframe: str = "24h", crypto: str = None):
+        """Generate price chart for this bot's ticker (or another one you name)."""
         hours = self.TIMEFRAME_OPTIONS.get(timeframe.lower())
         if not hours:
             await interaction.response.send_message(
@@ -447,7 +451,7 @@ class ChartGroup(app_commands.Group):
                 ephemeral=True
             )
             return
-        await self._send_chart(interaction, self.crypto_name, hours, timeframe)
+        await self._send_chart(interaction, (crypto or self.crypto_name).upper(), hours, timeframe)
     
     @price.autocomplete("timeframe")
     async def timeframe_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -455,11 +459,24 @@ class ChartGroup(app_commands.Group):
         filtered = [opt for opt in options if current.lower() in opt.lower()] if current else options[:9]
         return [app_commands.Choice(name=opt, value=opt) for opt in filtered[:25]]
     
+    @price.autocomplete("crypto")
+    async def crypto_autocomplete(self, interaction: discord.Interaction, current: str):
+        try:
+            names = [c.name for c in load_bot_configs()]
+        except Exception:
+            names = []
+        cur = current.upper()
+        matches = [n for n in names if cur in n.upper()] if cur else names
+        return [app_commands.Choice(name=n, value=n) for n in sorted(matches)[:25]]
+    
     async def _send_chart(self, interaction: discord.Interaction, crypto: str, hours: int, timeframe_str: str = "24h"):
         await interaction.response.defer()
         
         try:
-            chart_bytes = await self.chart_service.get_chart_bytes(self.db, crypto, hours, timeframe_str)
+            is_yield = crypto.upper() in YIELD_TICKERS
+            chart_bytes = await self.chart_service.get_chart_bytes(
+                self.db, crypto, hours, timeframe_str, is_yield
+            )
             
             if not chart_bytes:
                 await interaction.followup.send(f"No price data available for {crypto} (need at least 2 data points)")
@@ -469,8 +486,9 @@ class ChartGroup(app_commands.Group):
             buf.name = f"{crypto.lower()}_chart.png"
             file = discord.File(buf, filename=buf.name)
             
+            label = "yield" if is_yield else "price"
             await interaction.followup.send(
-                content=f"**{crypto.upper()} - {timeframe_str} chart**",
+                content=f"**{crypto.upper()} - {timeframe_str} {label} chart**",
                 file=file
             )
         except Exception as e:
