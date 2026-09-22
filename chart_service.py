@@ -73,7 +73,7 @@ class ChartService:
             ax.scatter(dates[max_idx], prices_arr[max_idx], color='#00d26a', 
                       s=100, zorder=5, marker='^', edgecolors='white', linewidths=1)
             
-            ax.annotate(f'LOW\n{self._format_price(prices_arr[min_idx])}',
+            ax.annotate(f'LOW\n{self._format_price(prices_arr[min_idx], is_yield)}',
                         xy=(dates[min_idx], prices_arr[min_idx]),
                         xytext=(10, -30), textcoords='offset points',
                         fontsize=8, color='#888888',
@@ -81,7 +81,7 @@ class ChartService:
                                  edgecolor='#30363d', pad=0.3),
                         arrowprops=dict(arrowstyle='->', color='#ff4757', lw=1))
             
-            ax.annotate(f'HIGH\n{self._format_price(prices_arr[max_idx])}',
+            ax.annotate(f'HIGH\n{self._format_price(prices_arr[max_idx], is_yield)}',
                         xy=(dates[max_idx], prices_arr[max_idx]),
                         xytext=(10, 20), textcoords='offset points',
                         fontsize=8, color='#888888',
@@ -105,6 +105,12 @@ class ChartService:
             
             ax.set_ylabel('Yield (%)' if is_yield else 'Price (USD)', fontsize=11, color='#888888', labelpad=10)
             ax.set_xlabel('Time', fontsize=11, color='#888888', labelpad=10)
+            
+            if is_yield:
+                # A yield axis must read 4.98%, not a bare 4.98. Without an
+                # explicit formatter matplotlib emits a raw float.
+                from matplotlib.ticker import FuncFormatter
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:.2f}%'))
             
             ax.tick_params(colors='#888888', labelsize=9)
             ax.spines['bottom'].set_color('#30363d')
